@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
 
 import os
+import sys 
 import tensorflow as tf
 from matplotlib import pyplot as plt
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
+# check if gpu is available 
+if not tf.config.experimental.list_physical_devices('GPU'):
+    sys.exit("not gpu available / registered") 
 
 from fdnet_utils import DataGenerator, DataGeneratorFMRI,\
     print_metrics, model_compile
 
-os.chdir("dir-to-code")
+rootdir="/fileserver/external/body/abd/anum/"
+os.chdir(rootdir+"FD-Net")
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
 physical_devices = tf.config.list_physical_devices("GPU")
@@ -27,8 +32,8 @@ model = model_compile(optimizer=optimizer, reg=lambda_reg)
 
 # model.summary(line_length=150)
 #%% LOAD DATA (DWI)
-load_path = "dir-to-data"
-batch_size = 4
+load_path = rootdir+"/data_HCP/"
+batch_size = 8
 
 # train
 slice_path_train = load_path + "/train/slices_like_topup/*.nii"
@@ -55,13 +60,13 @@ dg_train = DataGenerator(
     )
 
 # val
-slice_path_val = load_path + "/val/slices_like_topup/*.nii"
-topup_path_val = None
-field_path_val = None
+slice_path_val = load_path + "/val/val/slices_like_topup/*.nii"
+topup_path_val = load_path + "/val/val/slices_topup/*.nii"
+field_path_val = load_path + "/val/val/slices_field_topup/*.nii"
 
 list_slices_val = glob.glob(slice_path_val)
-list_topups_val = None
-list_fields_val = None
+list_topups_val = glob.glob(topup_path_val)
+list_fields_val = glob.glob(field_path_val)
 
 list_slices_val.sort()
 
@@ -79,9 +84,9 @@ dg_val   = DataGenerator(
     )
 
 # test
-slice_path_test = load_path + "/test/slices_like_topup/*.nii"
-topup_path_test = load_path + "/test/slices_topup/*.nii"
-field_path_test = load_path + "/test/slices_field_topup/*.nii"
+slice_path_test = load_path + "/test/test/slices_like_topup/*.nii"
+topup_path_test = load_path + "/test/test/slices_topup/*.nii"
+field_path_test = load_path + "/test/test/slices_field_topup/*.nii"
 
 list_slices_test = glob.glob(slice_path_test)
 list_topups_test = glob.glob(topup_path_test)
@@ -104,8 +109,8 @@ dg_test  = DataGenerator(
     )
 
 #%% TRAIN (DWI)
-epochs = 200
-patience = epochs//10
+epochs = 1
+patience = epochs//1
 
 callback = tf.keras.callbacks.EarlyStopping(
     monitor="val_loss",
@@ -166,9 +171,9 @@ model.save_weights(load_path + "/weights-name")
 #%% LOAD WEIGHTS
 model.load_weights(load_path + "/weights-name")
 #%% PRINT METRICS (DWI)
-list_print  = glob.glob(load_path + "/test/slices_like_topup/*.nii")
-list_topup_print = glob.glob(load_path + "/test/slices_topup/*.nii")
-list_field_print = glob.glob(load_path + "/test/slices_field_topup/*.nii")
+list_print  = glob.glob(load_path + "/test/predict/slices_like_topup/*.nii")
+list_topup_print = glob.glob(load_path + "/test/predict/slices_topup/*.nii")
+list_field_print = glob.glob(load_path + "/test/predict/slices_field_topup/*.nii")
 
 dg_test_print  = DataGenerator(
     list_print,
@@ -202,8 +207,8 @@ for j in tqdm(range(len(dg_test_print))):
                   ext="DWI")    
 
 
-#%% LOAD DATA + TRAIN (FMRI)
-load_path = "dir-to-data"
+""" #%% LOAD DATA + TRAIN (FMRI)
+load_path = "/home/ch253549/Downloads/FD-Net/FD-Net"
 batch_size = 4
 
 # train
@@ -303,3 +308,5 @@ for j in tqdm(range(len(dg_test_print))):
                   file_name,
                   mask_field=True,
                   ext="FMRI") # !!! "FMRI_finetuned" for finetuning weights
+    """ 
+ 

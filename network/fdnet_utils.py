@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
 
+import os
+# set cuda visible to 1 
+#os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+
 import tensorflow as tf
 import tensorflow.keras.backend as K
 from tensorflow.keras.models import Model
@@ -223,7 +228,7 @@ class DataGenerator(tf.keras.utils.Sequence):
             # field
             if not self.train:               
                 field = [x for x in self.list_IDs_field if
-                         sub_data+"_3T_DWI_dir"+dir_data+"_topup_b0_fout_slice"+slice_data+".nii" in x]
+                         sub_data+"_3T_DWI_dir"+dir_data+"_topup_fout_slice"+slice_data+".nii" in x]
                 imy = nib.load(field[0]).get_fdata()
             # imy *= -0.11232 # already compensated for in data
             
