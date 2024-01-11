@@ -1,3 +1,11 @@
+"""This is heavily refactored version of the original code by Serge: 
+    - add __name__ call
+    - split code into functions 
+    - added argparse 
+    - split train and test routines 
+    
+    """
+
 # -*- coding: utf-8 -*-
 
 import os
@@ -5,6 +13,7 @@ import os
 #os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
+import argparse
 import sys 
 import tensorflow as tf
 from matplotlib import pyplot as plt
@@ -23,8 +32,8 @@ if not tf.config.experimental.list_physical_devices('GPU'):
 from fdnet_utils import DataGenerator, DataGeneratorFMRI,\
     print_metrics, model_compile
 
-rootdir="/fileserver/external/body/abd/anum/dualecho/FD-Net/FD-Net/"
-os.chdir(rootdir)
+rootdir="/fileserver/external/body/abd/anum/"
+os.chdir(rootdir+"FD-Net")
 
 physical_devices = tf.config.list_physical_devices("GPU")
 for device in physical_devices:
@@ -134,7 +143,7 @@ def load_data(load_path):
 if __name__ == '__main__':
     
     # init vars 
-    load_path = rootdir+"/data"
+    load_path = rootdir+"/data_HCP/"
     batch_size = 8
     epochs = 1
     patience = epochs//1
