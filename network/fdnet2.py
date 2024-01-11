@@ -3,63 +3,81 @@
     - split code into functions 
     - added argparse 
     - split train and test routines 
-    
     """
 
 # -*- coding: utf-8 -*-
 
 import os
-# set cuda visible to 1 
-#os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+
 
 import argparse
 import sys 
-import tensorflow as tf
+import glob as glob
+from datetime import datetime
+from tqdm import tqdm
+
 from matplotlib import pyplot as plt
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
+
+import tensorflow as tf
+
 
 # check if gpu is available 
 if not tf.config.experimental.list_physical_devices('GPU'):
     sys.exit("not gpu available / registered") 
     
-    # tf.config.experimental.get_memory_info(tf.config.experimental.list_physical_devices('GPU')[0])
+# load custom 
+from fdnet_utils import DataGenerator, print_metrics, model_compile
 
-#from IPython import embed; embed()
-
-from fdnet_utils import DataGenerator, DataGeneratorFMRI,\
-    print_metrics, model_compile
-
-rootdir="/fileserver/external/body/abd/anum/"
-os.chdir(rootdir+"FD-Net")
-
+# set memory growth
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 physical_devices = tf.config.list_physical_devices("GPU")
 for device in physical_devices:
     tf.config.experimental.set_memory_growth(device, True)
      
-import glob as glob
+
     
 def load_args(): 
     parser = argparse.ArgumentParser()
-    parser.add_argument(mode, type=str,  choices=["train", "test"],default="train",help='train or test')
-    #parser.add_argument('--config', type=str, required=True)    
-    #parser.add_argument('--cuda', type=str, default="0",help='choose gpu')
-    #parser.add_argument('--folder_path', type=str, help='folder to analyze')
-    #parser.add_argument('--slice_range', nargs='+', default=None, type=int, help='slices to analyze')
-    #parser.add_argument('--repetitionsuffix', default=1, type=int, help='indicate which repetition we should pick - 1 to 6')
+    parser.add_argument('mode', type=str,  choices=["train", "test"],default="train",help='train or test')
+    parser.add_argument('--dataset', type=str,  choices=["dualecho", "hcp", "tsc"],default="hcp",help='choose which dataset to train / test on')
     
+    # parameters 
+    parser.add_argument('--rootdir', type=str,  default="/fileserver/external/body/abd/anum/",help='where all the data is contained')
+    parser.add_argument('--batch_size', type=int,  default=8)
+    parser.add_argument('--patience', type=int,  default=1,help='patience')
+    parser.add_argument('--epochs', type=int,  default=1)
+    parser.add_argument('--early_stopping_delta', type=float,  default=5e-6, help="early stopping criteria threshold after which training is cut off")
+    parser.add_argument('--lr', type=float,  default=1e-4, help="learning rate")
+    parser.add_argument('--lambda_reg', type=float,  default=1e-5, help="TBD")
+    parser.add_argument('--weights', type=str,  default=None, help="load from saved weights")
+    parser.add_argument('--debug', action="store_true", help="sets epochs to 1 and limits data to 2 batches")
     
-    #parser.add_argument('--view', action='store_true', default=False,help='plot output in itksnap and in rview')
-    #parser.add_argument('--split_channels', action='store_true', default=False,help='view split files')
-    #parser.add_argument('--datadir','-d',type=str,default = '', help='path to a previously generated directory that also contains an options file (which may be read once again to re-run the experiment once again)')
-    #parser.add_argument('--debug',action='store_true')
     args = parser.parse_args()
     
     return args     
     
-def load_data(load_path):
+    
+def choose_dataset(rootdir, dataset):
+    
+    if dataset == 'hcp':
+        load_path = rootdir + "data/HCP/"
+    elif dataset == 'tsc':
+        load_path = rootdir + "data/TSC/"
+    elif dataset == 'dualecho':
+        load_path = rootdir + "data/dualecho/"
+    else:
+        sys.exit('wrong dataset specified')
+    
+    assert os.path.exists(load_path), f"Path does not exist"
+    
+    return load_path
+    
+    
+def load_data(load_path, batch_size,debug=False):
+    
+    # from IPython import embed; embed()
 
     # train
     slice_path_train = load_path + "/train/slices_like_topup/*.nii"
@@ -75,6 +93,11 @@ def load_data(load_path):
     list_train = list_slices_train
     list_topup_train = list_topups_train
     list_field_train = list_fields_train
+    
+    if debug:
+        list_train = list_train[:2*batch_size]
+        #list_topup_train = list_topup_train[:2*batch_size]
+        #list_field_train = list_field_train[:2*batch_size]
 
     dg_train = DataGenerator(
         list_train,
@@ -99,6 +122,11 @@ def load_data(load_path):
     list_val   = list_slices_val
     list_topup_val = list_topups_val
     list_field_val = list_fields_val
+    
+    if debug:
+        list_val = list_val[:2*batch_size]
+        list_topup_val = list_topup_val[:2*batch_size]
+        list_field_val = list_field_val[:2*batch_size]    
 
     dg_val   = DataGenerator(
         list_val,
@@ -125,6 +153,11 @@ def load_data(load_path):
     list_test.sort()
     list_topup_test.sort()
     list_field_test.sort()
+    
+    if debug:
+        list_test = list_val[:2]
+        list_topup_test = list_topup_test[:2]
+        list_field_test = list_field_test[:2]        
 
     dg_test  = DataGenerator(
         list_test,
@@ -134,36 +167,37 @@ def load_data(load_path):
         shuffle=False
         )
 
-
-
-    return dg_train,dg_val, dg_test
+    return dg_train,dg_val, dg_test, list_test
 
 
     
 if __name__ == '__main__':
     
-    # init vars 
-    load_path = rootdir+"/data_HCP/"
-    batch_size = 8
-    epochs = 1
-    patience = epochs//1
-    
+    args = load_args()
 
     # data 
-    dg_train, dg_val, dg_test = load_data(load_path)
+    data_path = choose_dataset(args.rootdir, args.dataset)
+    dg_train, dg_val, dg_test,list_test = load_data(data_path, args.batch_size, args.debug)
+
+    # compile model 
+    optimizer = tf.keras.optimizers.Adam(learning_rate=args.lr)
+    model = model_compile(optimizer=optimizer, reg=args.lambda_reg)
+
+    # where to save 
+    current_time = datetime.now().strftime("%Y_%m_%d_%H_%M") 
+    prefix = current_time if not args.debug else "debug"
+    savedir = data_path + "output/" + prefix + "/"
+    
+    # limit epochs if debug
+    epochs = args.epochs if not args.debug else 1
 
     if args.mode == 'train':
-        
-        # compile model 
-        optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
-        lambda_reg = 1e-5            
-        model = model_compile(optimizer=optimizer, reg=lambda_reg)
         
         # early stopping 
         callback = tf.keras.callbacks.EarlyStopping(
             monitor="val_loss",
-            min_delta=5e-6,
-            patience=patience,
+            min_delta=args.early_stopping_delta,
+            patience=args.patience,
             verbose=3,
             mode="min",
             baseline=None,
@@ -179,7 +213,7 @@ if __name__ == '__main__':
             )
         
         # save weights (at the end)
-        model.save_weights(load_path + "/weights-name")                    
+        model.save_weights(data_path + "/weights-name")                    
 
         # plot results after training 
         plt.figure()
@@ -193,15 +227,20 @@ if __name__ == '__main__':
 
         # save training history 
         hist_df = pd.DataFrame(hist.history)
-        hist_csv_file = load_path + "/file-name.csv"
+        os.makedirs(savedir, exist_ok=True)
+        print(f"Results saved to:\n{savedir}")
+        hist_csv_file = savedir + "/file-name.csv"
         with open(hist_csv_file, mode='w') as f:
             hist_df.to_csv(f)
             
 
     elif args.mode == 'test':
         
+        assert args.weights is not None 
+        assert os.path.exists(args.weights)
+        
         #%% LOAD WEIGHTS
-        model.load_weights(load_path + "/weights-name")
+        model.load_weights(args.weights)
         
                 
         # get test results
@@ -232,9 +271,11 @@ if __name__ == '__main__':
         
         
         #%% PRINT METRICS (DWI)
-        list_print  = glob.glob(load_path + "/test/predict/slices_like_topup/*.nii")
-        list_topup_print = glob.glob(load_path + "/test/predict/slices_topup/*.nii")
-        list_field_print = glob.glob(load_path + "/test/predict/slices_field_topup/*.nii")
+        os.makedirs(savedir, exist_ok=True)
+        print(f"Results saved to:\n{savedir}")
+        list_print  = glob.glob(savedir + "/test/predict/slices_like_topup/*.nii")
+        list_topup_print = glob.glob(savedir + "/test/predict/slices_topup/*.nii")
+        list_field_print = glob.glob(savedir + "/test/predict/slices_field_topup/*.nii")
 
         dg_test_print  = DataGenerator(
             list_print,
@@ -268,127 +309,3 @@ if __name__ == '__main__':
                         ext="DWI")    
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        # UNUSED  - FMRI PART 
-
-
-
-        """
-        #%% LOAD DATA + TRAIN (FMRI)
-        load_path = rootdir
-        batch_size = 4
-
-        # train
-        slice_path_train = load_path + "/fmri/slices/distorted/*.nii"
-        topup_path_train = None
-        field_path_train = None
-
-        list_slices_train = glob.glob(slice_path_train)
-        list_topups_train = None
-        list_fields_train = None
-
-        list_slices_train.sort()
-
-        list_train = list_slices_train
-        list_topup_train = list_topups_train
-        list_field_train = list_fields_train
-
-        dg_train = DataGeneratorFMRI(
-            list_train,
-            list_topup_train,
-            list_field_train,
-            batch_size=batch_size,
-            shuffle=True,
-            train=True
-            )
-
-        # train
-        epochs = 64
-        patience = 4
-
-        callback = tf.keras.callbacks.EarlyStopping(
-            monitor="loss",
-            min_delta=5e-6,
-            patience=patience,
-            verbose=3,
-            mode="min",
-            baseline=None,
-            restore_best_weights=True
-            )       
-
-        hist = model.fit(
-            dg_train,
-            epochs=epochs,
-            callbacks=[callback]
-            )
-
-        plt.figure()
-        plt.plot(hist.history["loss"])
-        plt.ylabel("Loss")
-        plt.xlabel("Epoch Number")
-        plt.legend(["Fine-tune"], loc="upper right")
-        plt.show()
-        # plt.savefig("plot-name-fine-tune", dpi=300, bbox_inches="tight")
-
-        hist_df = pd.DataFrame(hist.history)
-        hist_csv_file = load_path + "/file-name-fine-tune.csv"
-        with open(hist_csv_file, mode='w') as f:
-            hist_df.to_csv(f)
-
-        # weights
-        model.save_weights(load_path + "/weights-name-fine-tune")
-        # model.load_weights(load_path + "/weights-name-fine-tune")
-        #%% PRINT METRICS (FMRI)
-        load_path = "dir-to-data"
-
-        list_print  = glob.glob(load_path + "/fmri/slices/distorted/*.nii")
-        list_topup_print = glob.glob(load_path + "/fmri/slices/corrected_topup_resized/image/*.nii")
-        list_field_print = glob.glob(load_path + "/fmri/slices/corrected_topup_resized/field/*.nii")
-
-        dg_test_print  = DataGeneratorFMRI(
-            list_print,
-            list_topup_print,
-            list_field_print,
-            batch_size=1,
-            shuffle=False
-            )
-
-        for j in tqdm(range(len(dg_test_print))):
-            dat = dg_test_print[j]
-            X = dat[0]
-            Y, _, _, _, abc = model.predict(X, verbose=0) # !!! choose appropriate weights
-                    
-            file_name = list_print[j].split('/')[-1]
-            
-            i = 0 # batch index
-            
-            #images
-            topup_image =  dat[1][0][i,:,:,0,3]
-            network_image = Y[i,:,:,0,3]
-            topup_field = dat[1][0][i,:,:,0,2]
-            network_field = Y[i,:,:,0,2]
-            
-            print_metrics(topup_image,
-                        topup_field,
-                        network_image,
-                        network_field,
-                        file_name,
-                        mask_field=True,
-                        ext="FMRI") # !!! "FMRI_finetuned" for finetuning weights
-        """
