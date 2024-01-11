@@ -1,0 +1,27 @@
+
+# frm ankara 
+ssh e2.tch.harvard.edu
+
+
+# inside e2 machien 
+srun .... 
+
+
+# inside allocated gpu machine 
+module load anaconda3
+conda activate fdnet | source activate fdnet 
+
+which python 
+nvidia-smi 
+
+
+# copy from your machine to temp
+rsync /home/ch253549/Downloads/FD-Net/FD-Net/slicing/slicing_FMRI.py ch253549@e2.tch.harvard.edu:/temp_work/ch253549/
+
+
+# install conda inside e2 
+cd /temp_work/ch253549/conda_pkgs
+conda env create --prefix $PWD/fdnet3 -f fdnet3.yml 
+
+# install not on e2 
+conda env create --name fdnet3 -f fdnet3.yml 

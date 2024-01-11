@@ -1,0 +1,12 @@
+name: fdnet2
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - contextlib2
+  - numpy
+  - scipy
+  - scikit-image
+  - nibabel
+  - dipy
+  - tensorflow
