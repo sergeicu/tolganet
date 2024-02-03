@@ -11,9 +11,14 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Lambda, ZeroPadding2D, Conv2D,\
         UpSampling2D, Concatenate, Cropping2D, Dense, Flatten# MaxPooling2D, Dropout, 
 
+
+
 import nibabel as nib
 import numpy as np
 import math
+
+from scipy.ndimage import zoom
+
 
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
@@ -124,9 +129,143 @@ def l_fdnet(reg):
             
             l = loss_similr + reg*loss_smooth
         else:
-            l = loss_similr
+            l = loss_similr 
             
         return l
+    return loss
+
+# Noise-Contrastive Estimation (NCE)
+def nce_loss(true, pred):
+    noise_dist = tf.random.normal(tf.shape(pred))
+    true_logits = tf.reduce_sum(true * pred, axis=-1)
+    noise_logits = tf.reduce_sum(noise_dist * pred, axis=-1)
+    true_labels = K.ones_like(true_logits)
+    noise_labels = K.zeros_like(noise_logits)
+    logits = K.concatenate([true_logits, noise_logits], axis=0)
+    labels = K.concatenate([true_labels, noise_labels], axis=0)
+    return tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits))
+
+def mutual_information_loss(y_true, y_pred, num_bins=64, eps=1e-5):
+    # Flatten the tensors
+    y_true_flat = tf.reshape(y_true, [-1])
+    y_pred_flat = tf.reshape(y_pred, [-1])
+
+    # Compute histograms
+    from IPython import embed; embed()
+    hist_2d = tf.histogram_fixed_width_2d([y_true_flat, y_pred_flat], 
+                                          value_range=[0, 1], 
+                                          nbins=num_bins)
+    hist_true = tf.reduce_sum(hist_2d, axis=1)
+    hist_pred = tf.reduce_sum(hist_2d, axis=0)
+
+    # Normalize histograms
+    p_xy = tf.cast(hist_2d, tf.float32) / tf.cast(tf.reduce_sum(hist_2d), tf.float32)
+    p_x = tf.cast(hist_true, tf.float32) / tf.cast(tf.reduce_sum(hist_true), tf.float32)
+    p_y = tf.cast(hist_pred, tf.float32) / tf.cast(tf.reduce_sum(hist_pred), tf.float32)
+
+    # Compute mutual information
+    p_x = tf.expand_dims(p_x, axis=1)
+    p_y = tf.expand_dims(p_y, axis=0)
+
+    p_xy += eps
+    p_x += eps
+    p_y += eps
+
+    mi = tf.reduce_sum(p_xy * tf.math.log(p_xy / (p_x * p_y)))
+
+    return -mi  # Negative MI for minimization
+
+# Mutual Information Neural Estimation
+# https://chat.openai.com/share/f6aaa969-7411-48f9-8239-29d970587e29
+def mine_loss(true, pred):
+    joint = K.concatenate([true, pred], axis=0)
+    marginal = K.concatenate([tf.random.shuffle(true), pred], axis=0)
+
+    # Forward pass through a neural network to get the scores
+    T_joint = score_network(joint)
+    T_marginal = score_network(marginal)
+
+    # Mutual Information Neural Estimation (MINE)
+    mi_estimate = K.mean(T_joint) - K.log(K.mean(K.exp(T_marginal)))
+    return -mi_estimate  # Negative MI because we minimize loss
+
+
+def l_fdnet_mi(reg):
+    def loss(y_true, y_pred):
+        field     = y_pred[..., 2] 
+        
+        in_LR = y_true[..., 0]
+        in_RL = y_true[..., 1]
+        out_LR    = y_pred[..., 0]
+        out_RL    = y_pred[..., 1]
+        
+        # loss_similr = 0.5*( K.mean( K.pow(out_LR - in_LR, 2)) +\
+        #                     K.mean( K.pow(out_RL - in_RL, 2)) )
+        
+        loss_similr = 0.5 * (mutual_information_loss(in_LR, out_LR) + mutual_information_loss(in_RL, out_RL))
+        
+                
+        if reg:        
+            valley = K.sum( K.maximum( K.abs(field) - 32, 0.))
+            loss_smooth = l_be(field, avg=True) + 1e3*(valley)
+            
+            l = loss_similr + reg*loss_smooth
+        else:
+            l = loss_similr 
+            
+        return l
+    return loss
+
+
+
+def l_fdnet_nce(reg):
+    def loss(y_true, y_pred):
+        field     = y_pred[..., 2] 
+        
+        in_LR = y_true[..., 0]
+        in_RL = y_true[..., 1]
+        out_LR    = y_pred[..., 0]
+        out_RL    = y_pred[..., 1]
+        
+        # loss_similr = 0.5*( K.mean( K.pow(out_LR - in_LR, 2)) +\
+        #                     K.mean( K.pow(out_RL - in_RL, 2)) )
+        
+        loss_similr = 0.5 * (nce_loss(in_LR, out_LR) + nce_loss(in_RL, out_RL))
+        
+                
+        if reg:        
+            valley = K.sum( K.maximum( K.abs(field) - 32, 0.))
+            loss_smooth = l_be(field, avg=True) + 1e3*(valley)
+            
+            l = loss_similr + reg*loss_smooth
+        else:
+            l = loss_similr 
+            
+        return l
+    return loss
+
+
+def l_fdnet_mine(reg):
+    def loss(y_true, y_pred):
+        field = y_pred[..., 2]
+
+        in_LR = y_true[..., 0]
+        in_RL = y_true[..., 1]
+        out_LR = y_pred[..., 0]
+        out_RL = y_pred[..., 1]
+
+        loss_similr = 0.5 * (mine_loss(in_LR, out_LR) + mine_loss(in_RL, out_RL))
+
+        if reg:
+            valley = K.sum(K.maximum(K.abs(field) - 32, 0.))
+            loss_smooth = l_be(field, avg=True) + 1e3 * (valley)
+
+            l = loss_similr + reg * loss_smooth
+        else:
+            l = loss_similr
+
+        return l
+
     return loss
 
 class DataGenerator(tf.keras.utils.Sequence):
@@ -169,6 +308,53 @@ class DataGenerator(tf.keras.utils.Sequence):
         self.indexes = np.arange(self.nsamples)
         if self.shuffle == True:
             np.random.shuffle(self.indexes)
+            
+    def _pad_image(self,image,expected_shape=(144,168)):
+        
+        # if expected shape is significantly different to image shape - use interpolation, 
+        # otherwise - pad the image... 
+        
+        
+        # if difference is bigger than 20 voxels - use interpolation 
+        diff =[expected_shape[0] - image.shape[0], expected_shape[1] - image.shape[1]]
+        if np.abs(np.max(diff))>15:
+            zoom_factors = [expected_shape[0] / image.shape[0],  expected_shape[1] / image.shape[1],1]
+            if image.ndim ==4: 
+                zoom_factors = zoom_factors + [1]
+            
+
+            # Downsample
+            out = zoom(image, zoom=zoom_factors, order=3)  # Using order=3 for cubic interpolation
+
+            
+        else: 
+            # run as normal 
+
+            # Calculate the padding sizes
+            pad_x = (expected_shape[0] - image.shape[0]) // 2
+            pad_y = (expected_shape[1] - image.shape[1]) // 2
+            
+            # Handle odd padding
+            pad_x_extra = (expected_shape[0] - image.shape[0]) % 2
+            pad_y_extra = (expected_shape[1] - image.shape[1]) % 2
+
+            # Apply padding
+            if image.ndim == 3:
+                out = np.pad(image, ((pad_x, pad_x + pad_x_extra), 
+                                    (pad_y, pad_y + pad_y_extra), 
+                                    (0, 0)), 
+                            mode='constant', constant_values=0)        
+            elif image.ndim == 2: 
+                out = np.pad(image, ((pad_x, pad_x + pad_x_extra), 
+                                    (pad_y, pad_y + pad_y_extra)), 
+                            mode='constant', constant_values=0)                    
+            elif image.ndim == 4: 
+                out = np.pad(image, ((pad_x, pad_x + pad_x_extra), 
+                                    (pad_y, pad_y + pad_y_extra), 
+                                    (0, 0),(0, 0)), 
+                            mode='constant', constant_values=0)                    
+
+        return out 
 
     def __data_generation(self, batch_indexes):
         """
@@ -206,17 +392,21 @@ class DataGenerator(tf.keras.utils.Sequence):
             
 			# Load data
             imx = nib.load(self.list_IDs[file_id]).get_fdata() #LR & RL stacked
+            imx = self._pad_image(imx,expected_shape=self.dim)
+            
+            
             
             if not self.train:
                 imtopup = nib.load(self.list_topup_IDs[file_id]).get_fdata()
+                imtopup = self._pad_image(imtopup,expected_shape=self.dim)
                 imtopup[imtopup<0] = 0
                 
                 # identify the field
-                data = self.list_IDs[file_id].split("/")[-1]
-                sub_data = data[:data.find("_3T_DWI_dir")]
-                dir_data = data[data.find("_3T_DWI_dir")+11:data.find("_volume")]
+                # data = self.list_IDs[file_id].split("/")[-1]
+                # sub_data = data[:data.find("_3T_DWI_dir")]
+                # dir_data = data[data.find("_3T_DWI_dir")+11:data.find("_volume")]
                 # vol_data = data[data.find("_volume")+7:data.find("_slice")]
-                slice_data = data[data.find("_slice")+6:data.find(".nii")]
+                # slice_data = data[data.find("_slice")+6:data.find(".nii")]
             
             # normalize
             imxmax = imx.max() 
@@ -225,16 +415,39 @@ class DataGenerator(tf.keras.utils.Sequence):
                 if not self.train:
                     imtopup /= imxmax
                     
+                    
+                    
             # field
-            if not self.train:               
-                field = [x for x in self.list_IDs_field if
-                         sub_data+"_3T_DWI_dir"+dir_data+"_topup_fout_slice"+slice_data+".nii" in x]
-                imy = nib.load(field[0]).get_fdata()
+            if not self.train:
+                # from IPython import embed; embed()    
+                # self.list_topup_IDs[file_id]           
+                # field = [x for x in self.list_IDs_field if
+                #          sub_data+"_3T_DWI_dir"+dir_data+"_topup_fout_slice"+slice_data+".nii" in x]
+                imy = nib.load(self.list_IDs_field[file_id]).get_fdata()
+                imy = self._pad_image(imy,expected_shape=self.dim)
             # imy *= -0.11232 # already compensated for in data
             
+            
+            # from IPython import embed; embed()
+            if imx.ndim == 3: 
+                assert imx.shape[-1]==2
+                imx = np.expand_dims(imx,-1)
+            elif imx.ndim == 4 and imx.shape[2] ==1: 
+                assert imx.shape[3] ==2 
+                # swap directions 
+                imx = np.moveaxis(imx, 3,2)
+            
             xlr = imx[:,:,0,0]
             xrl = imx[:,:,1,0]
             if not self.train:
+                
+
+                if imtopup.ndim == 2: 
+                    imtopup = np.expand_dims(imtopup,-1)    
+                
+                if imy.ndim == 2: 
+                    imy = np.expand_dims(imy,-1)                        
+                                
                 ytopup = imtopup[:,:,0]
                 yfield = imy[:,:,0]
             
@@ -308,186 +521,187 @@ class DataGenerator(tf.keras.utils.Sequence):
                             tf.stack([XLR3, XRL3, yf3, yt3], axis=-1),
                             trn]
 
-class DataGeneratorFMRI(tf.keras.utils.Sequence):
-    """Generates data for Keras"""
+# class DataGeneratorFMRI(tf.keras.utils.Sequence):
+#     """Generates data for Keras"""
     
-    def __init__(self,
-                 list_IDs,
-                 list_topup_IDs,
-                 list_IDs_field,
-                 dim=(144,168),
-                 n_channels=1,
-                 batch_size=1,
-                 shuffle=False,
-                 train=False):
-        self.list_IDs = list_IDs                #list of distorted nii
-        self.list_topup_IDs = list_topup_IDs    #list of ref topup images
-        self.list_IDs_field = list_IDs_field    #list of ref topup fields
-        self.dim = dim                          #2d image
-        self.n_channels = n_channels
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.nsamples = len(self.list_IDs)      #number of nii
-        self.train = train                      #no need for TOPUP if training
-        self.on_epoch_end()
+#     def __init__(self,
+#                  list_IDs,
+#                  list_topup_IDs,
+#                  list_IDs_field,
+#                  dim=(144,168),
+#                  n_channels=1,
+#                  batch_size=1,
+#                  shuffle=False,
+#                  train=False):
+#         self.list_IDs = list_IDs                #list of distorted nii
+#         self.list_topup_IDs = list_topup_IDs    #list of ref topup images
+#         self.list_IDs_field = list_IDs_field    #list of ref topup fields
+#         self.dim = dim                          #2d image
+#         self.n_channels = n_channels
+#         self.batch_size = batch_size
+#         self.shuffle = shuffle
+#         self.nsamples = len(self.list_IDs)      #number of nii
+#         self.train = train                      #no need for TOPUP if training
+#         self.on_epoch_end()
 		
-    def __len__(self):
-        "Denotes the number of batches per epoch"
-        return int(np.floor(self.nsamples / self.batch_size))
+#     def __len__(self):
+#         "Denotes the number of batches per epoch"
+#         return int(np.floor(self.nsamples / self.batch_size))
 
-    def __getitem__(self, index):
-        "Generate one batch of data"
-        # Generate indexes of the batch
-        batch_indexes = self.indexes[
-            index*self.batch_size:(index+1)*self.batch_size]
-        # Generate data
-        [X, Y] = self.__data_generation(batch_indexes)
+#     def __getitem__(self, index):
+#         "Generate one batch of data"
+#         # Generate indexes of the batch
+#         batch_indexes = self.indexes[
+#             index*self.batch_size:(index+1)*self.batch_size]
+#         # Generate data
+#         [X, Y] = self.__data_generation(batch_indexes)
 
-        return X, Y
+#         return X, Y
 
-    def on_epoch_end(self):
-        "Updates indexes after each epoch"
-        self.indexes = np.arange(self.nsamples)
-        if self.shuffle == True:
-            np.random.shuffle(self.indexes)
+#     def on_epoch_end(self):
+#         "Updates indexes after each epoch"
+#         self.indexes = np.arange(self.nsamples)
+#         if self.shuffle == True:
+#             np.random.shuffle(self.indexes)
 
-    def __data_generation(self, batch_indexes):
-        """
-        Generates data containing batch_size samples
-        """
-        # Initialization
-        XLR = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
-        XRL = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#     def __data_generation(self, batch_indexes):
+#         """
+#         Generates data containing batch_size samples
+#         """
+#         # Initialization
+#         XLR = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         XRL = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
         
-        XLR1 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
-        XRL1 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         XLR1 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         XRL1 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
         
-        XLR2 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
-        XRL2 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         XLR2 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         XRL2 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
         
-        XLR3 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
-        XRL3 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         XLR3 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         XRL3 = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
         
-        yt = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
-        yf = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         yt = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
+#         yf = np.empty((self.batch_size, self.dim[0], self.dim[1], self.n_channels))
         
-        yt1 = np.empty_like(yt)
-        yf1 = np.empty_like(yf)
+#         yt1 = np.empty_like(yt)
+#         yf1 = np.empty_like(yf)
         
-        yt2 = np.empty_like(yt)
-        yf2 = np.empty_like(yf)
+#         yt2 = np.empty_like(yt)
+#         yf2 = np.empty_like(yf)
         
-        yt3 = np.empty_like(yt)
-        yf3 = np.empty_like(yf)
+#         yt3 = np.empty_like(yt)
+#         yf3 = np.empty_like(yf)
         
-		# Generate data
-        for ii in range(batch_indexes.shape[0]):
-            # Store sample
-            file_id = batch_indexes[ii]
+# 		# Generate data
+#         for ii in range(batch_indexes.shape[0]):
+#             # Store sample
+#             file_id = batch_indexes[ii]
             
-			# Load data
-            imx = nib.load(self.list_IDs[file_id]).get_fdata() #LR & RL stacked
+# 			# Load data
+#             imx = nib.load(self.list_IDs[file_id]).get_fdata() #LR & RL stacked
             
-            if not self.train:
-                imtopup = nib.load(self.list_topup_IDs[file_id]).get_fdata()
-                imtopup[imtopup<0] = 0
+#             if not self.train:
+#                 imtopup = nib.load(self.list_topup_IDs[file_id]).get_fdata()
+#                 imtopup[imtopup<0] = 0
                 
-                # identify the field
-                data = self.list_IDs[file_id].split("/")[-1]
-                sub_data = data[:data.find("_3T")]
-                type_data = data[data.find("_3T"):data.find("_series")]
-                series_data = data[data.find("_series")+7:data.find("_slice")]
-                slice_data = data[data.find("_slice")+6:data.find(".nii")]
+#                 # identify the field
+#                 data = self.list_IDs[file_id].split("/")[-1]
+#                 sub_data = data[:data.find("_3T")]
+#                 type_data = data[data.find("_3T"):data.find("_series")]
+#                 series_data = data[data.find("_series")+7:data.find("_slice")]
+#                 slice_data = data[data.find("_slice")+6:data.find(".nii")]
             
-            # normalize
-            imxmax = imx.max()
-            if imxmax > 0.:
-                imx /= imxmax
-                if not self.train:
-                    imtopup /= imxmax
-            if not self.train:               
-                field = [x for x in self.list_IDs_field if
-                         sub_data+"_"+sub_data+type_data+"_topup_0_fout_series"+\
-                             series_data+"_slice"+slice_data+".nii" in x]
-                imy = nib.load(field[0]).get_fdata()
-                # Hz to Px conversion
-                imy *= -0.0522 # !!! depends on the dataset
+#             # normalize
+#             imxmax = imx.max()
+#             if imxmax > 0.:
+#                 imx /= imxmax
+#                 if not self.train:
+#                     imtopup /= imxmax
+#             if not self.train:               
+#                 field = [x for x in self.list_IDs_field if
+#                          sub_data+"_"+sub_data+type_data+"_topup_0_fout_series"+\
+#                              series_data+"_slice"+slice_data+".nii" in x]
+#                 imy = nib.load(field[0]).get_fdata()
+#                 # Hz to Px conversion
+#                 imy *= -0.0522 # !!! depends on the dataset
             
-            xlr = imx[:,:,0,0]
-            xrl = imx[:,:,1,0]
-            if not self.train:
-                ytopup = imtopup[:,:,0]
-                yfield = imy[:,:,0]
+#             from IPython import embed; embed()
+#             xlr = imx[:,:,0,0]
+#             xrl = imx[:,:,1,0]
+#             if not self.train:
+#                 ytopup = imtopup[:,:,0]
+#                 yfield = imy[:,:,0]
             
-            XLR[ii,:,:,0] = xlr    
-            XRL[ii,:,:,0] = xrl
+#             XLR[ii,:,:,0] = xlr    
+#             XRL[ii,:,:,0] = xrl
             
-            # multiblur
+#             # multiblur
             
-            XLR1[ii,:,:,0] = gaussian(xlr, sigma=0.5)
-            XRL1[ii,:,:,0] = gaussian(xrl, sigma=0.5)
+#             XLR1[ii,:,:,0] = gaussian(xlr, sigma=0.5)
+#             XRL1[ii,:,:,0] = gaussian(xrl, sigma=0.5)
             
-            XLR2[ii,:,:,0] = gaussian(xlr, sigma=1.5)
-            XRL2[ii,:,:,0] = gaussian(xrl, sigma=1.5)
+#             XLR2[ii,:,:,0] = gaussian(xlr, sigma=1.5)
+#             XRL2[ii,:,:,0] = gaussian(xrl, sigma=1.5)
             
-            XLR3[ii,:,:,0] = gaussian(xlr, sigma=2.5)
-            XRL3[ii,:,:,0] = gaussian(xrl, sigma=2.5)
+#             XLR3[ii,:,:,0] = gaussian(xlr, sigma=2.5)
+#             XRL3[ii,:,:,0] = gaussian(xrl, sigma=2.5)
             
-            if not self.train:               
-                yt[ii,:,:,0] = imtopup[:,:,0]
-                yf[ii,:,:,0] = imy[:,:,0]
+#             if not self.train:               
+#                 yt[ii,:,:,0] = imtopup[:,:,0]
+#                 yf[ii,:,:,0] = imy[:,:,0]
                 
-                yt1[ii,:,:,0] = gaussian(ytopup, sigma=0.5)
-                yf1[ii,:,:,0] = gaussian(yfield, sigma=0.5)
+#                 yt1[ii,:,:,0] = gaussian(ytopup, sigma=0.5)
+#                 yf1[ii,:,:,0] = gaussian(yfield, sigma=0.5)
                 
-                yt2[ii,:,:,0] = gaussian(ytopup, sigma=1.5)
-                yf2[ii,:,:,0] = gaussian(yfield, sigma=1.5)
+#                 yt2[ii,:,:,0] = gaussian(ytopup, sigma=1.5)
+#                 yf2[ii,:,:,0] = gaussian(yfield, sigma=1.5)
                 
-                yt3[ii,:,:,0] = gaussian(ytopup, sigma=2.5)
-                yf3[ii,:,:,0] = gaussian(yfield, sigma=2.5)
+#                 yt3[ii,:,:,0] = gaussian(ytopup, sigma=2.5)
+#                 yf3[ii,:,:,0] = gaussian(yfield, sigma=2.5)
         
-        # prepare data for outputting
-        XLR  = np.nan_to_num(XLR)
-        XRL  = np.nan_to_num(XRL)
-        XLR1 = np.nan_to_num(XLR1)
-        XRL1 = np.nan_to_num(XRL1)
-        XLR2 = np.nan_to_num(XLR2)
-        XRL2 = np.nan_to_num(XRL2)
-        XLR3 = np.nan_to_num(XLR3)
-        XRL3 = np.nan_to_num(XRL3)
-        yt    = np.nan_to_num(yt)
-        yf    = np.nan_to_num(yf)
-        yt1   = np.nan_to_num(yt1)
-        yf1   = np.nan_to_num(yf1)
-        yt2   = np.nan_to_num(yt2)
-        yf2   = np.nan_to_num(yf2)
-        yt3   = np.nan_to_num(yt3)
-        yf3   = np.nan_to_num(yf3)
-        trn  = np.array([1., 0., 0., 0., 1., 0.])
+#         # prepare data for outputting
+#         XLR  = np.nan_to_num(XLR)
+#         XRL  = np.nan_to_num(XRL)
+#         XLR1 = np.nan_to_num(XLR1)
+#         XRL1 = np.nan_to_num(XRL1)
+#         XLR2 = np.nan_to_num(XLR2)
+#         XRL2 = np.nan_to_num(XRL2)
+#         XLR3 = np.nan_to_num(XLR3)
+#         XRL3 = np.nan_to_num(XRL3)
+#         yt    = np.nan_to_num(yt)
+#         yf    = np.nan_to_num(yf)
+#         yt1   = np.nan_to_num(yt1)
+#         yf1   = np.nan_to_num(yf1)
+#         yt2   = np.nan_to_num(yt2)
+#         yf2   = np.nan_to_num(yf2)
+#         yt3   = np.nan_to_num(yt3)
+#         yf3   = np.nan_to_num(yf3)
+#         trn  = np.array([1., 0., 0., 0., 1., 0.])
         
-        XLR     = tf.cast(XLR,      dtype=tf.float32)
-        XRL     = tf.cast(XRL,      dtype=tf.float32)
-        XLR1    = tf.cast(XLR1,     dtype=tf.float32)
-        XRL1    = tf.cast(XRL1,     dtype=tf.float32)
-        XLR2    = tf.cast(XLR2,     dtype=tf.float32)
-        XRL2    = tf.cast(XRL2,     dtype=tf.float32)
-        XLR3    = tf.cast(XLR3,     dtype=tf.float32)
-        XRL3    = tf.cast(XRL3,     dtype=tf.float32)
-        yt      = tf.cast(yt,       dtype=tf.float32)
-        yf      = tf.cast(yf,       dtype=tf.float32)
-        yt1     = tf.cast(yt1,      dtype=tf.float32)
-        yf1     = tf.cast(yf1,      dtype=tf.float32)
-        yt2     = tf.cast(yt2,      dtype=tf.float32)
-        yf2     = tf.cast(yf2,      dtype=tf.float32)
-        yt3     = tf.cast(yt3,      dtype=tf.float32)
-        yf3     = tf.cast(yf3,      dtype=tf.float32)
-        trn     = tf.cast(trn,      dtype=tf.float32)
+#         XLR     = tf.cast(XLR,      dtype=tf.float32)
+#         XRL     = tf.cast(XRL,      dtype=tf.float32)
+#         XLR1    = tf.cast(XLR1,     dtype=tf.float32)
+#         XRL1    = tf.cast(XRL1,     dtype=tf.float32)
+#         XLR2    = tf.cast(XLR2,     dtype=tf.float32)
+#         XRL2    = tf.cast(XRL2,     dtype=tf.float32)
+#         XLR3    = tf.cast(XLR3,     dtype=tf.float32)
+#         XRL3    = tf.cast(XRL3,     dtype=tf.float32)
+#         yt      = tf.cast(yt,       dtype=tf.float32)
+#         yf      = tf.cast(yf,       dtype=tf.float32)
+#         yt1     = tf.cast(yt1,      dtype=tf.float32)
+#         yf1     = tf.cast(yf1,      dtype=tf.float32)
+#         yt2     = tf.cast(yt2,      dtype=tf.float32)
+#         yf2     = tf.cast(yf2,      dtype=tf.float32)
+#         yt3     = tf.cast(yt3,      dtype=tf.float32)
+#         yf3     = tf.cast(yf3,      dtype=tf.float32)
+#         trn     = tf.cast(trn,      dtype=tf.float32)
                 
-        return [XLR, XRL], [tf.stack([XLR,  XRL,  yf,  yt ], axis=-1),
-                            tf.stack([XLR1, XRL1, yf1, yt1], axis=-1),
-                            tf.stack([XLR2, XRL2, yf2, yt2], axis=-1),
-                            tf.stack([XLR3, XRL3, yf3, yt3], axis=-1),
-                            trn]
+#         return [XLR, XRL], [tf.stack([XLR,  XRL,  yf,  yt ], axis=-1),
+#                             tf.stack([XLR1, XRL1, yf1, yt1], axis=-1),
+#                             tf.stack([XLR2, XRL2, yf2, yt2], axis=-1),
+#                             tf.stack([XLR3, XRL3, yf3, yt3], axis=-1),
+#                             trn]
 
 def print_metrics(topup_image,
                   topup_field,
@@ -558,6 +772,55 @@ def print_metrics(topup_image,
                 subject, direction, volume, slicee,
                 psnr_image_n_vs_t, psnr_field_n_vs_t,
                 ssim_image_n_vs_t, ssim_field_n_vs_t))
+            
+def print_metrics2(topup_image,
+                  topup_field,
+                  network_image,
+                  network_field,
+                  file_name,
+                  mask_field=True):
+
+    #reorient everything
+    network_field = np.fliplr((np.rot90(network_field )))
+    topup_image   = np.fliplr((np.rot90(topup_image   )))
+    topup_field   = np.fliplr((np.rot90(topup_field   )))
+    network_image = np.fliplr((np.rot90(network_image )))
+    
+    #scalar metrics    
+    psnr_image_n_vs_t = peak_signal_noise_ratio(
+        topup_image, network_image,
+        data_range=np.max(topup_image)
+        )
+    
+    ssim_image_n_vs_t = structural_similarity(
+        topup_image, network_image,
+        multichannel=False,
+        gaussian_weights=True, sigma=1.5, use_sample_covariance=False,
+        data_range=np.max(topup_image)
+        )
+    
+    if mask_field:
+        network_field = network_field.copy()
+        topup_field = topup_field.copy()
+        topup_otsu, mask = median_otsu(topup_image, median_radius=3)
+        mask = binary_fill_holes(mask)
+        network_field[~mask] = 0.
+        topup_field[~mask] = 0.
+        
+    psnr_field_n_vs_t = peak_signal_noise_ratio(
+        topup_field, network_field,
+        data_range=np.max(topup_field)
+        )
+    
+    ssim_field_n_vs_t = structural_similarity(
+        topup_field, network_field,
+        multichannel=False,
+        gaussian_weights=True, sigma=1.5, use_sample_covariance=False,
+        data_range=np.max(topup_field)
+        )
+        
+        
+    return psnr_image_n_vs_t, psnr_field_n_vs_t, ssim_image_n_vs_t, ssim_field_n_vs_t
 
 def gaussian_blur(img, kernel_size=11, sigma=5):
     def gauss_kernel(channels, kernel_size, sigma):
@@ -574,10 +837,28 @@ def gaussian_blur(img, kernel_size=11, sigma=5):
     return tf.nn.depthwise_conv2d(img, gaussian_kernel, [1, 1, 1, 1],
                                   padding="SAME", data_format="NHWC")
 
-def model_compile(optimizer, input_shape=(144,168,1), reg=None):
+
+def model_compile(optimizer,input_shape=(144,168), reg=None, loss_type='mse', resume=None):
+    if loss_type=='mse':
+        loss_func=l_fdnet
+    elif loss_type=='nce':
+        loss_func=l_fdnet_nce
+    elif loss_type == 'mine':
+        loss_func=l_fdnet_mine
+    elif loss_type == 'mi':
+        loss_func = l_fdnet_mi
     
+    input_shape=(input_shape[0],input_shape[1],1)
     output_name="out_unet"
-    pad_value = ((8, 8), (12, 12))
+    
+    # determine padding so that everything is divisible by 8 
+    divide_by=32
+    next_divisible_num1 = ((input_shape[0] + divide_by-1) // divide_by) * divide_by
+    next_divisible_num2 = ((input_shape[1] + divide_by-1) // divide_by) * divide_by
+    pad1=int((next_divisible_num1 - input_shape[0])/2)
+    pad2=int((next_divisible_num2 - input_shape[1])/2)
+    pad_value = ((pad1, pad1), (pad2, pad2))
+    # pad_value = ((8, 8), (12, 12))
     
     print("~~~ model ~~~")
     
@@ -774,11 +1055,27 @@ def model_compile(optimizer, input_shape=(144,168,1), reg=None):
             ]
         )
     
+    # resume training 
+    if resume is not None:
+        ww=resume
+        if ww.endswith(".h5"):
+            assert os.path.exists(ww)
+        else:
+        
+            # check for .index files if not saved as .h5 
+            ww = ww.replace(".data-00000-of-00001", "")
+            ww = ww.replace(".index", "")
+            assert os.path.exists(ww+ ".index"), f"weights .index file does not exist"
+            assert os.path.exists(ww+ ".data-00000-of-00001"), f"weights .data-00000-of-00001 file does not exist"
+        
+        model.load_weights(ww)
+    
+    
     model.compile(
-        loss        ={ "full_scale":l_fdnet(reg),
-                        "multiblur_S":l_fdnet(reg*1e1),
-                        "multiblur_M":l_fdnet(reg*1e2),
-                        "multiblur_H":l_fdnet(reg*1e3),
+        loss        ={ "full_scale":loss_func(reg),
+                        "multiblur_S":loss_func(reg*1e1),
+                        "multiblur_M":loss_func(reg*1e2),
+                        "multiblur_H":loss_func(reg*1e3),
                         "rigid":l_rigid(),
                             },
         loss_weights={ "full_scale":0.4,
