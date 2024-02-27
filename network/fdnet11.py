@@ -1,26 +1,12 @@
 """We are optimizing the network for inferrence here"""
 
-"""This is heavily refactored version of the original code by Serge: 
-    - add __name__ call
-    - split code into functions 
-    - added argparse 
-    - split train and test routines 
-    """
-
-# -*- coding: utf-8 -*-
-
 import os
-import re 
-
 import argparse
 import sys 
 import glob as glob
 from datetime import datetime
-from tqdm import tqdm
 
 
-from matplotlib import pyplot as plt
-import pandas as pd
 import numpy as np
 import nibabel as nb 
 
@@ -29,14 +15,14 @@ import time
 
 start_time = time.time()
 
-import wandb
+
 
 # check if gpu is available 
 if not tf.config.experimental.list_physical_devices('GPU'):
     sys.exit("not gpu available / registered") 
     
 # load custom 
-from fdnet_utils import DataGenerator, print_metrics2, model_compile
+from fdnet_utils import DataGenerator, model_compile
 
 # set memory growth
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
@@ -48,14 +34,12 @@ for device in physical_devices:
     
 def load_args(): 
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str,  choices=["train", "test"],default="train",help='train or test')
-    parser.add_argument('--dataset', type=str,  choices=["dualecho", "hcp","hcp_tolga12", "tsc", "custom", "individual_RLRL"],default="hcp",help='choose which dataset to train / test on')
+    parser.add_argument('--dataset', type=str,  choices=["custom", "individual_RLRL"],default="custom",help='choose dataset type')
     
     # parameters 
     parser.add_argument('--rootdir', type=str,  default="/fileserver/external/body/abd/anum/",help='where all the data is contained')
     parser.add_argument('--batch_size', type=int,  default=4)
     parser.add_argument('--patience', type=int,  default=20,help='patience')
-    parser.add_argument('--epochs', type=int,  default=200)
     parser.add_argument('--early_stopping_delta', type=float,  default=5e-6, help="early stopping criteria threshold after which training is cut off")
     parser.add_argument('--lr', type=float,  default=1e-4, help="learning rate")
     parser.add_argument('--lambda_reg', type=float,  default=1e-5, help="TBD")
@@ -104,111 +88,10 @@ def load_args():
     return args     
     
     
-def choose_dataset(rootdir, dataset,custompath=None, customshape=None):
     
-    if dataset == 'hcp':
-        load_path = rootdir + "data/HCP/"
-        min_shape = (144,168)
-    elif dataset == 'hcp_tolga12':
-        load_path = rootdir + "data/HCP/tolga_12_replicated_v2/"
-        min_shape = (144,168)
-    elif dataset == 'tsc':
-        load_path = rootdir + "data/TSC/"
-        min_shape = None
-    elif dataset == 'dualecho':
-        load_path = rootdir + "data/dualecho/derivatives/topup_python/whole-volume/"
-        min_shape = (316, 288)
-    elif dataset == 'custom':
-        assert custompath is not None
-        assert customshape is not None
-        load_path = custompath
-        min_shape = customshape     
-    elif dataset == 'individual_RLRL':
-        assert custompath is not None
-        assert customshape is not None
-        load_path = custompath
-        min_shape = customshape     
-
-    else:
-        sys.exit('wrong dataset specified')
+def load_data(load_path, batch_size,debug=False, fileprefix=None,imshape=None):
     
-    assert os.path.exists(load_path), f"Path does not exist"
-    
-    return load_path,min_shape
-
-def check_filenames(list1, list2, list3, load_path, prefix, debug=False):
-    newlist1=[]
-    newlist2=[]
-    newlist3=[]
-    for c, (im_f, topup_f, field_f) in enumerate(zip(list1,list2,list3)):
-        skip=False 
-        
-        im = im_f.replace(load_path+prefix+"/slices_input/", "")
-        topup = topup_f.replace(load_path+prefix+"/slices_topup_image/","")
-        field = field_f.replace(load_path+prefix+"/slices_topup_field/", "")
-        
-        # find dir number
-        im_dir=re.search(r'dir(\d+)', im).group(1)
-        topup_dir=re.search(r'dir(\d+)', topup).group(1)
-        field_dir=re.search(r'dir(\d+)', field).group(1)
-        
-        if not im_dir == topup_dir == field_dir:
-            skip=True
-            if debug:
-                print("\n\n\nDIRS DO NOT MATCH. Check im, topup, field names\n\n\n")
-                embed()
-                break
-
-        # find subject number
-        im_id=re.search(r'(\d+)', im).group(1)
-        topup_id=re.search(r'(\d+)', topup).group(1)
-        field_id=re.search(r'(\d+)', field).group(1)
-        
-        if not im_id == topup_id == field_id:
-            skip=True
-            if debug:
-                print("\n\n\nSUB IDS DO NOT MATCH. Check im, topup, field names\n\n\n")
-                embed()
-                break
-
-        # find slice number
-        im_sl=re.search(r'slice(\d+)', im).group(1)
-        topup_sl=re.search(r'slice(\d+)', topup).group(1)
-        field_sl=re.search(r'slice(\d+)', field).group(1)
-        
-        if not im_sl == topup_sl == field_sl:
-            skip=True
-            if debug:
-                print("\n\n\nSLICES DO NOT MATCH. Check im, topup, field names\n\n\n")
-                embed()
-                break
-            
-        if not skip:
-            newlist1.append(im_f)
-            newlist2.append(topup_f) 
-            newlist3.append(field_f) 
-            
-    print(f"ORIGINAL length: {len(list1)}")
-    print(f"UPDATED length: {len(newlist1)}")
-            
-    return newlist1, newlist2, newlist3
-
-def verify_slices_hcp():
-    # custom function that makes sure that slices are matched 
-    # also - we remove most 
-    pass
-
-def remove_slices(paths, start_end_range):
-    
-    start_from, end_with = start_end_range
-    
-    filtered_paths = [path for path in paths if not any(f"_slice{str(i).zfill(4)}.nii.gz" in path for i in range(start_from,end_with))]    
-    
-    return filtered_paths
-    
-        
-    
-def load_data(load_path, batch_size,debug=False, dataset='hcp', fileprefix=None,imshape=None, topup=True):
+    topup=False
     
 
         
@@ -218,34 +101,11 @@ def load_data(load_path, batch_size,debug=False, dataset='hcp', fileprefix=None,
     # Paths init
     ################
 
-    if dataset !="custom":
-        slice_path_train = load_path + "/train/slices_input/*.nii*"
-        slice_path_val = load_path + "/val/slices_input/*.nii*"
-        slice_path_test = load_path + "/test/slices_input/*.nii*"
-    else:
-        slice_path_train = load_path + "*.nii*"
-        slice_path_val = load_path + "*.nii*"
-        slice_path_test = load_path + "*.nii*"
+    slice_path_train = load_path + "*.nii*"
+    slice_path_val = load_path + "*.nii*"
+    slice_path_test = load_path + "*.nii*"
         
-            
-    if topup:
-        if dataset == 'dualecho':
-            topup_image = "slices_topup_image" + "_e1"
-        else: 
-            topup_image = "slices_topup_image"
-        
-        topup_path_train = load_path + "/train/"+topup_image+"/*.nii*"
-        field_path_train = load_path + "/train/slices_topup_field/*.nii*"
- 
-        topup_path_val = load_path + "/val/"+topup_image+"/*.nii*"
-        field_path_val = load_path + "/val/slices_topup_field/*.nii*"
- 
-        topup_path_test = load_path + "/test/"+topup_image+"/*.nii*"
-        field_path_test = load_path + "/test/slices_topup_field/*.nii*"
-    
-
-    
-    
+     
 
     ################
     # Get files and sort 
@@ -276,55 +136,13 @@ def load_data(load_path, batch_size,debug=False, dataset='hcp', fileprefix=None,
         list_topup_train = list_field_train = list_topup_val = list_field_val = list_topup_test = list_field_test = None
 
     # slices to remove 
-    if dataset=='hcp':
-        # these ranges define top and bottom of head in HCP (we want to remove the edges)
-        range1=[0,30]
-        range2=[100,111]
-        imshape=(144,168)
-    elif dataset == 'hcp_tolga12':           
-        range1=[0,0]
-        range2=[0,0]    
-        imshape=(144,168)
-    elif dataset == 'dualecho':
-        # not removing anything at the moment as number of slices varies significantly per subject - need to curate better data
-        range1=[0,0]
-        range2=[0,0]    
-        imshape=(316,288)    
-    elif dataset == 'custom':
-        # not removing anything at the moment as number of slices varies significantly per subject - need to curate better data
-        range1=[0,0]
-        range2=[0,0]    
-        assert imshape is not None 
-        assert len(imshape)==2
-    elif dataset == 'individual_RLRL':
-        # not removing anything at the moment as number of slices varies significantly per subject - need to curate better data
-        range1=[0,0]
-        range2=[0,0]    
-        assert imshape is not None 
-        assert len(imshape)==2    
-    
+    assert imshape is not None 
+    assert len(imshape)==2
+
     
 
     
     
-    ############    
-    # Check files
-    ############    
-
-        
-    # remove slices 
-    for rangei in [range1,range2]:
-        list_train = remove_slices(list_train, rangei)        
-        list_val = remove_slices(list_val, rangei)
-        list_test = remove_slices(list_test, rangei)
-        if topup:
-            list_topup_train = remove_slices(list_topup_train, rangei)
-            list_field_train = remove_slices(list_field_train, rangei)
-            list_topup_val = remove_slices(list_topup_val, rangei)
-            list_field_val = remove_slices(list_field_val, rangei)
-            list_topup_test = remove_slices(list_topup_test, rangei)
-            list_field_test = remove_slices(list_field_test, rangei)    
-        
 
     ############    
     # choose specific files
@@ -364,55 +182,6 @@ def load_data(load_path, batch_size,debug=False, dataset='hcp', fileprefix=None,
         list_topup_test = list_topup_test[:2]
         list_field_test = list_field_test[:2]        
 
-    ############    
-    # [custom to each dataset] 
-    # Check that files match 
-    ############    
-    
-    if dataset == 'hcp' or dataset == 'hcp_tolga12':
-
-        # check if files match
-        list_train, list_topup_train, list_field_train = check_filenames(list_train, list_topup_train, list_field_train, load_path, '/val/', debug=debug)
-    
-        # check if files match
-        list_val, list_topup_val, list_field_val = check_filenames(list_val,list_topup_val, list_field_val, load_path, '/val/', debug=debug)
-        
-        # let's check if the subjectID, and slice numbers match 
-        list_test,list_topup_test, list_field_test= check_filenames(list_test,list_topup_test, list_field_test, load_path, '/test/',debug=debug)
-        
-
-        # let's limit the size of val to a few batches of data instead -> e.g. 80 slices only 
-        list_val = list_val[:10*batch_size]
-        list_topup_val = list_topup_val[:10*batch_size]
-        list_field_val = list_field_val[:10*batch_size]    
-        
-    if dataset == 'dualecho':
-
-        list_length = 5 if len(list_field_val) >=5 else len(list_field_val)
-        random_numbers = np.random.choice(range(1, len(list_field_val)), list_length, replace=True)
-        for i in random_numbers:
-            
-            i1=list_train[i]
-            i2=list_topup_train[i]
-            i3= list_field_train[i]
-            assert os.path.basename(i1) == os.path.basename(i2) == os.path.basename(i3)
-
-            i1=list_val[i]
-            i2=list_topup_val[i]
-            i3= list_field_val[i]
-            assert os.path.basename(i1) == os.path.basename(i2) == os.path.basename(i3)        
-            
-            
-            if list_test:
-                i1=list_test[i]
-                i2=list_topup_test[i]
-                i3= list_field_test[i]
-                assert os.path.basename(i1) == os.path.basename(i2) == os.path.basename(i3)      
-            else:
-                list_test = list_val
-                list_topup_test = list_topup_val
-                list_field_test = list_field_val
-        
     ############    
     # GENERATORS 
     ############    
@@ -464,30 +233,19 @@ if __name__ == '__main__':
     
     
     args = load_args()
-    
-    if args.mode != 'test' and not args.nowandb:
-        project=args.project
 
-
-        config = {}
-        if args.name is not None: 
-            config['name'] = args.name        
-            
-            # initial_width=64,base_width=10, current_width=10,
-            # dropout=True,dropout_rate=0.2,
-            # epochs=600,learning_rate = 0.0001,
-            # patience=100, output_size=2,batch_size=8,
-     
 
 
     # data 
-    data_path, imshape = choose_dataset(args.rootdir, args.dataset, custompath=args.custompath, customshape=args.customshape)    
-    dg_train, dg_val, dg_test,list_test = load_data(data_path, args.batch_size, args.debug,args.dataset,args.fileprefix, args.customshape, args.notopup)
+    data_path = args.custompath
+    imshape = args.customshape    
+    assert os.path.exists(data_path), f"Path does not exist"
+    
+    dg_train, dg_val, dg_test,list_test = load_data(data_path, args.batch_size, args.debug, args.fileprefix, args.customshape)
     
     
 
     # compile model 
-    #optimizer = tf.keras.optimizers.Adam(learning_rate=args.lr)
     if args.legacy:
         optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=args.lr)
     else:
@@ -501,286 +259,144 @@ if __name__ == '__main__':
     current_time = datetime.now().strftime("%Y_%m_%d_%H_%M") 
     prefix = current_time if not args.debug else "debug"
     savedir = data_path + "/weights/" + prefix + "/"
+
+
+            
+    # check weights 
+    weights = args.weights
+    assert weights is not None 
+    if args.weights.endswith(".h5"):
+        assert os.path.exists(weights)
+    else:
     
-    # limit epochs if debug
-    epochs = args.epochs if not args.debug else 1
-
-    if args.mode == 'train':
-        
+        # check for .index files if not saved as .h5 
+        weights = weights.replace(".data-00000-of-00001", "")
+        weights = weights.replace(".index", "")
+        assert os.path.exists(weights+ ".index"), f"weights .index file does not exist"
+        assert os.path.exists(weights+ ".data-00000-of-00001"), f"weights .data-00000-of-00001 file does not exist"
+    
+    #%% LOAD WEIGHTS
+    model.load_weights(weights)
+    
+    
+    if args.savedir is None:
+        savedir = os.path.dirname(weights) + "/"    
+        os.makedirs(savedir +"predicted/", exist_ok=True)
+    else: 
+        savedir = args.savedir + "/"
         os.makedirs(savedir, exist_ok=True)
-        
-        # early stopping 
-        callback = tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss",
-            min_delta=args.early_stopping_delta,
-            patience=args.patience,
-            verbose=args.verbose,
-            mode="min",
-            baseline=None,
-            restore_best_weights=True
-            )       
-        
-        # model saving 
-        if args.save_batch_freq.isdigit():
-            callback2 = tf.keras.callbacks.ModelCheckpoint(
-                savedir + "/"+"ckpt-{batch:02d}-{loss:.2f}.h5", 
-                monitor='val_loss',
-                save_best_only=False,
-                mode='min', 
-                save_weights_only=True,
-                save_freq=int(args.save_batch_freq)) #            
-        else:
-            callback2 = tf.keras.callbacks.ModelCheckpoint(
-                savedir + "/"+"ckpt-{epoch:02d}-{loss:.2f}.h5", 
-                monitor='val_loss',
-                save_best_only=False,
-                mode='min', 
-                save_weights_only=True,
-                period=args.period)
-            
-                        
-
-        
-        class BatchValidationCallback(tf.keras.callbacks.Callback):
-            def __init__(self, val_data, batch_freq):
-                super(BatchValidationCallback, self).__init__()
-                self.val_data = val_data
-                self.batch_freq = batch_freq
-                self.batch_counter = 0
-
-            def on_batch_end(self, batch, logs=None):
-                self.batch_counter += 1
-                if self.batch_counter % self.batch_freq == 0:
-                    val_logs = self.model.evaluate(self.val_data[0], self.val_data[1], verbose=0)
-                    for key, value in val_logs.items():
-                        print(f'Validation {key}: {value}')                        
-                        
-                        
-
-        
-        # wandb logging callback 
-        if not args.nowandb: 
-            callback3 = wandb.keras.WandbMetricsLogger(log_freq="batch")
-            callbacks = [callback, callback2,callback3]
-        else: 
-            callbacks = [callback, callback2]
+        print(f"Files are saved to: {savedir}")
             
             
-        # train 
-        hist = model.fit(
-            dg_train,
-            epochs=epochs,
-            validation_data=dg_val,
-            callbacks=callbacks, verbose=args.verbose
+    # pull results from customdir
+    if args.testdir: 
+
+
+    
+        train = True 
+        
+        # build a generator 
+        list_test = sorted(glob.glob(args.testdir + "/*.nii.gz"))
+        assert list_test
+        
+        dg_test  = DataGenerator(
+            list_test,
+            None,
+            None,
+            batch_size=args.batch_size,
+            shuffle=False,
+            train=False,
+            dim=imshape,
             )
+                
+
         
-        # save weights (at the end)
-        model.save_weights(savedir + "/weights-final")                    
-
-        # plot results after training 
-        plt.figure()
-        plt.plot(hist.history["loss"])
-        plt.plot(hist.history["val_loss"])
-        plt.ylabel("Loss")
-        plt.xlabel("Epoch Number")
-        plt.legend(["Train", "Val"], loc="upper right")
-        plt.show()
-        # plt.savefig("plot-name", dpi=300, bbox_inches="tight")
-
-        # save training history 
-        hist_df = pd.DataFrame(hist.history)
-        print(f"Results saved to:\n{savedir}")
-        hist_csv_file = savedir + "/file-name.csv"
-        with open(hist_csv_file, mode='w') as f:
-            hist_df.to_csv(f)
+        
+    # create generator for list names 
+    dg_test_names = batch_generator(list_test, batch_size=args.batch_size)
+    
+    
+    # get test results
+    
+    L = len(dg_test)
+    dfs = []
+    
+    
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print(f"START time: {execution_time} seconds")      
+        
+    for counter, (dat, names) in enumerate(zip(dg_test,dg_test_names)):
+        print(f"{counter}/{L}")
+        
+        if args.limit_test is not None: 
+            if counter > args.limit_test/args.batch_size:
+                print(f"\n\n\n\nExiting. Already processed {args.limit_test} slices\n\n\n")
+                sys.exit("Finished.") 
             
+        
+        
+    
+        i=0 # WARNING!!!! we should refer to specific name... 
+        
+        
+        # dat = dg_test[j]
+        X = dat[0]
 
-    elif args.mode == 'test':
-                
-        # check weights 
-        weights = args.weights
-        assert weights is not None 
-        if args.weights.endswith(".h5"):
-            assert os.path.exists(weights)
-        else:
+        # filename 
+        file_name = os.path.basename(names[i]) 
+
+        # skip existing 
+        if os.path.exists(savedir+file_name.replace(".nii.gz", "_XLR.nii.gz")) and not args.dontskip:
+            continue                
         
-            # check for .index files if not saved as .h5 
-            weights = weights.replace(".data-00000-of-00001", "")
-            weights = weights.replace(".index", "")
-            assert os.path.exists(weights+ ".index"), f"weights .index file does not exist"
-            assert os.path.exists(weights+ ".data-00000-of-00001"), f"weights .data-00000-of-00001 file does not exist"
+        start_time = time.time()
         
-        #%% LOAD WEIGHTS
-        model.load_weights(weights)
-        
-        
-        if args.savedir is None:
-            savedir = os.path.dirname(weights) + "/"    
-            os.makedirs(savedir +"predicted/", exist_ok=True)
-        else: 
-            savedir = args.savedir + "/"
-            os.makedirs(savedir, exist_ok=True)
-            print(f"Files are saved to: {savedir}")
-             
-             
-        # pull results from customdir
-        if args.testdir: 
-            if args.testdir_field is None and args.testdir_topup is None: 
-                no_topup = args.notopup
-                train = True 
-                
-                # build a generator 
-                list_test = sorted(glob.glob(args.testdir + "/*.nii.gz"))
-                assert list_test
-                list_topup_test = None 
-                list_field_test = None 
-                
-                dg_test  = DataGenerator(
-                    list_test,
-                    list_topup_test,
-                    list_field_test,
-                    batch_size=args.batch_size,
-                    shuffle=False,
-                    train=train,
-                    dim=imshape,
-                    )
-                
-                
-            else:
-                no_topup = args.notopup
-                train = True 
-                
-                # build a generator 
-                list_test = sorted(glob.glob(args.testdir + "/*.nii.gz"))
-                assert list_test
-                list_topup_test = sorted(glob.glob(args.testdir_topup + "/*.nii.gz"))
-                list_field_test = sorted(glob.glob(args.testdir_field + "/*.nii.gz"))
-                assert list_topup_test
-                assert list_field_test
-                
-                dg_test  = DataGenerator(
-                    list_test,
-                    list_topup_test,
-                    list_field_test,
-                    batch_size=args.batch_size,
-                    shuffle=False,
-                    train=False,
-                    dim=imshape,
-                    )
-                        
-        
-             
-            
-        # create generator for list names 
-        dg_test_names = batch_generator(list_test, batch_size=args.batch_size)
-        
-        
-        # get test results
-        
-        L = len(dg_test)
-        dfs = []
-        
+        # predict
+        # from IPython import embed; embed()
+        Y, Y1, Y2, Y3, rigid = model.predict(X, verbose=0)
         
         end_time = time.time()
         execution_time = end_time - start_time
-        print(f"START time: {execution_time} seconds")      
-          
-        for counter, (dat, names) in enumerate(zip(dg_test,dg_test_names)):
-            print(f"{counter}/{L}")
-            
-            if args.limit_test is not None: 
-                if counter > args.limit_test/args.batch_size:
-                    print(f"\n\n\n\nExiting. Already processed {args.limit_test} slices\n\n\n")
-                    sys.exit("Finished.") 
-                
-            
-            
+        print(f"Execution time: {execution_time} seconds")
         
-            i=0 # WARNING!!!! we should refer to specific name... 
-            
-            
-            # dat = dg_test[j]
-            X = dat[0]
-
-            # filename 
-            file_name = os.path.basename(names[i]) 
-
-            # skip existing 
-            if os.path.exists(savedir+file_name.replace(".nii.gz", "_XLR.nii.gz")) and not args.dontskip:
-                continue                
-            
-            start_time = time.time()
-            
-            # predict
-            # from IPython import embed; embed()
-            Y, Y1, Y2, Y3, rigid = model.predict(X, verbose=0)
-            
-            end_time = time.time()
-            execution_time = end_time - start_time
-            print(f"Execution time: {execution_time} seconds")
-            
-                    
-
-            # fetch individual data
-            XLR = X[0][i,:,:,0]
-            XRL = X[1][i,:,:,0]
-            YLR = Y[i,:,:,0,0]
-            YRL = Y[i,:,:,0,1]
-            network_image = Y[i,:,:,0,3]
-            network_field = Y[i,:,:,0,2]  
-            rigid_transform = rigid[i,:]
-                                
-            # get affine 
-            imo=nb.load(names[i])
-
-            # save 
-            nb.save(nb.Nifti1Image(XLR.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XLR.nii.gz"))
-            nb.save(nb.Nifti1Image(XRL.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XRL.nii.gz"))
-            nb.save(nb.Nifti1Image(YLR,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YLR.nii.gz"))
-            nb.save(nb.Nifti1Image(YRL,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YRL.nii.gz"))
-            
-            nb.save(nb.Nifti1Image(network_image,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_image.nii.gz"))
-            nb.save(nb.Nifti1Image(network_field,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_field.nii.gz"))
-            with open(savedir+file_name.replace(".nii.gz","_rigid_transform.txt"), "w") as f:
-                lines = [str(i) for i in list(rigid_transform)]
-                f.writelines(lines)
-                
-            if not no_topup: 
-                if args.dataset == 'individual_RLRL':
-                    topup_image =  dat[1][0][i,:,:,0,3]
-                    topup_field = dat[1][0][i,:,:,0,2]                                            
-                else:
-                    topup_image =  dat[1][0][i,:,:,0,3]
-                    topup_field = dat[1][0][i,:,:,0,2]                    
-            
-                psnr_i, psnr_f, ssim_i, ssim_f  = print_metrics2(topup_image,topup_field,network_image,network_field,file_name,mask_field=True)  
-                vol = re.sub(r'_slice.*$', '', file_name)
-                slicee=file_name[-11:-7]
-                # df = pd.DataFrame(psnr_image=psnr_i, psnr_field=psnr_f, ssim_image=ssim_i,ssim_field=ssim_f,file=vol, slicee=slicee)     
-                df = pd.DataFrame({'psnr_image': [psnr_i], 'psnr_field': [psnr_f], 'ssim_image': [ssim_i], 'ssim_field': [ssim_f], 'file': [vol], 'slicee': [slicee]})
-
-                dfs.append(df)
-                with open(savedir+file_name.replace(".nii.gz","_metrics.txt"), "w") as file:
-                    df.to_csv(file)                    
-                
-                nb.save(nb.Nifti1Image(topup_image.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_topup_image.nii.gz"))
-                nb.save(nb.Nifti1Image(topup_field.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_topup_field.nii.gz"))
                 
 
-        # get all metrics 
-        # with open(savedir+"/combined_metrics.txt", "w") as file:
-        #     pd.concat(dfs).to_csv(file)                       
-                    
-        print(f"Files are saved to: {savedir}")
+        # fetch individual data
+        XLR = X[0][i,:,:,0]
+        XRL = X[1][i,:,:,0]
+        YLR = Y[i,:,:,0,0]
+        YRL = Y[i,:,:,0,1]
+        network_image = Y[i,:,:,0,3]
+        network_field = Y[i,:,:,0,2]  
+        rigid_transform = rigid[i,:]
+                            
+        # get affine 
+        imo=nb.load(names[i])
+
+        # save 
+        nb.save(nb.Nifti1Image(XLR.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XLR.nii.gz"))
+        nb.save(nb.Nifti1Image(XRL.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XRL.nii.gz"))
+        nb.save(nb.Nifti1Image(YLR,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YLR.nii.gz"))
+        nb.save(nb.Nifti1Image(YRL,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YRL.nii.gz"))
         
-
-
-
-
-
-
-
+        nb.save(nb.Nifti1Image(network_image,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_image.nii.gz"))
+        nb.save(nb.Nifti1Image(network_field,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_field.nii.gz"))
+        with open(savedir+file_name.replace(".nii.gz","_rigid_transform.txt"), "w") as f:
+            lines = [str(i) for i in list(rigid_transform)]
+            f.writelines(lines)
             
+                
+    print(f"Files are saved to: {savedir}")
+    
+
+
+
+
+
+
+
+        
 
 
 
