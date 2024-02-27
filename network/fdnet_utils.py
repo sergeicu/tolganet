@@ -12,6 +12,8 @@ from tensorflow.keras.layers import Input, Lambda, ZeroPadding2D, Conv2D,\
         UpSampling2D, Concatenate, Cropping2D, Dense, Flatten# MaxPooling2D, Dropout, 
 
 
+from tensorflow.keras.layers import Resizing, Rescaling, RandomFlip, RandomRotation
+
 
 import nibabel as nib
 import numpy as np
@@ -300,6 +302,10 @@ class DataGenerator(tf.keras.utils.Sequence):
             index*self.batch_size:(index+1)*self.batch_size]
         # Generate data
         [X, Y] = self.__data_generation(batch_indexes)
+        
+        # augment the data randomly 
+        
+        
 
         return X, Y
 
@@ -318,9 +324,12 @@ class DataGenerator(tf.keras.utils.Sequence):
         # if difference is bigger than 20 voxels - use interpolation 
         diff =[expected_shape[0] - image.shape[0], expected_shape[1] - image.shape[1]]
         if np.abs(np.max(diff))>15:
-            zoom_factors = [expected_shape[0] / image.shape[0],  expected_shape[1] / image.shape[1],1]
-            if image.ndim ==4: 
-                zoom_factors = zoom_factors + [1]
+            if image.ndim == 2: 
+                zoom_factors = [expected_shape[0] / image.shape[0],  expected_shape[1] / image.shape[1]]
+            elif image.ndim == 3: 
+                zoom_factors = [expected_shape[0] / image.shape[0],  expected_shape[1] / image.shape[1],1]
+            elif image.ndim == 4:                 
+                zoom_factors = [expected_shape[0] / image.shape[0],  expected_shape[1] / image.shape[1],1,1]
             
 
             # Downsample
@@ -394,10 +403,15 @@ class DataGenerator(tf.keras.utils.Sequence):
             imx = nib.load(self.list_IDs[file_id]).get_fdata() #LR & RL stacked
             imx = self._pad_image(imx,expected_shape=self.dim)
             
+            # from IPython import embed; embed()
+            
             
             
             if not self.train:
                 imtopup = nib.load(self.list_topup_IDs[file_id]).get_fdata()
+                if imtopup.ndim == 4 and imtopup.shape[-1] == 2:
+                    # retain only one image (we expect 1 not 2)
+                    imtopup = imtopup[:,:,:,0]
                 imtopup = self._pad_image(imtopup,expected_shape=self.dim)
                 imtopup[imtopup<0] = 0
                 
