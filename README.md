@@ -1,12 +1,46 @@
 
+# Inferrence - Liam - please test 
+```
+
+# run our own kidney abd data through the best tolga net - to test timing 
+
+
+# ssh to gpu machine 
+ssh ankara 
+
+# Init conda  
+source /fileserver/external/body/abd/anum/miniconda3/bin/activate
+conda activate fdnet3
+export CUDA_VISIBLE_DEVICES=0,1
+
+
+# git clone 
+git clone git@github.com:sergeicu/tolganet.git
+cd tolganet/network
+git checkout inferrence_for_liam
+
+# set the network weights (NB it is NOT an existing file but a regexp expression)
+weights=/fileserver/external/body/abd/anum/tolganet/network/weights/fdnet_weights_42_subjects
+
+# run network with a batch of 160 images 
+
+# basic test - slices_input_test - liver (AX)
+imagepath=/fileserver/external/body/abd/anum/data/abd/v4_ax/b50/slices_input_test_rotated_MANY/
+savedir=$imagepath/predicted_tolga42_TEST
+rm -rf $savedir
+python fdnet11.py test --dataset custom --custompath $imagepath --customshape 144 168 --weights $weights --savedir $savedir --legacy --batch_size 80 --dontskip --testdir $imagepath --notopup 
+
+
+```
+
+
+
 # Dataset & Training 
 ...details of training 
 
 # Preprocessing
 ...
 
-# Inferrence
-...
 
 # Citation
 You are encouraged to modify/distribute this code. However, please acknowledge this code and cite the paper appropriately.
