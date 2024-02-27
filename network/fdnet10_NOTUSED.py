@@ -1,3 +1,10 @@
+# WARNING - READ ME 
+# applying MI loss function - not yet finished 
+
+HERE WE IMPLEMENT NETWORK FITTING MANUALLY BY APPLYING THE LOSS THE VALIDATION AND OTHER FUNCTIONS OURSELVES 
+https://www.tensorflow.org/guide/keras/customizing_what_happens_in_fit
+
+
 """This is heavily refactored version of the original code by Serge: 
     - add __name__ call
     - split code into functions 
@@ -23,7 +30,6 @@ import numpy as np
 import nibabel as nb 
 
 import tensorflow as tf
-import time 
 
 import wandb
 
@@ -32,7 +38,7 @@ if not tf.config.experimental.list_physical_devices('GPU'):
     sys.exit("not gpu available / registered") 
     
 # load custom 
-from fdnet_utils import DataGenerator, print_metrics2, model_compile
+from fdnet_utils2 import DataGenerator, print_metrics2, model_compile
 
 # set memory growth
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
@@ -58,13 +64,9 @@ def load_args():
     parser.add_argument('--weights', type=str,  default=None, help="load from saved weights")
     parser.add_argument('--debug', action="store_true", help="sets epochs to 1 and limits data to 2 batches")
     
-    parser.add_argument('--resume_training', type=str, default=None, help="provide path to saved weights")
-    
-    
-    
     
     # try different losses
-    parser.add_argument('--loss', type=str,  choices=["mse", "nce", "mine", "mi"],default="mse",help='which loss to use')
+    parser.add_argument('--loss', type=str,  choices=["mse", "nce", "mine"],default="mse",help='which loss to use')
     
     
     parser.add_argument('--savedir', type=str, help="custom save directory for test inferrence (or train)")
@@ -202,12 +204,10 @@ def load_data(load_path, batch_size,debug=False, dataset='hcp', fileprefix=None,
     
 
         
-    load_path = load_path + "/"
-     
+    
     ################
     # Paths init
     ################
-
     if dataset !="custom":
         slice_path_train = load_path + "/train/slices_input/*.nii*"
         slice_path_val = load_path + "/val/slices_input/*.nii*"
@@ -442,9 +442,6 @@ def batch_generator(lst, batch_size=8):
 if __name__ == '__main__':
     
     
-
-    
-    
     args = load_args()
     
     # wandb setup 
@@ -457,8 +454,7 @@ if __name__ == '__main__':
             # Set the project where this run will be logged
             project=args.project, 
             tags=args.tags, 
-            notes='',
-            name=args.name)
+            notes='')
 
         config = {}
         if args.name is not None: 
@@ -484,10 +480,7 @@ if __name__ == '__main__':
         optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=args.lr)
     else:
         optimizer = tf.keras.optimizers.Adam(learning_rate=args.lr)
-    model = model_compile(optimizer=optimizer, reg=args.lambda_reg, input_shape=imshape,loss_type=args.loss,resume=args.resume_training)
-    
-
-    
+    model = model_compile(optimizer=optimizer, reg=args.lambda_reg, input_shape=imshape,loss_type=args.loss)
 
     # where to save 
     current_time = datetime.now().strftime("%Y_%m_%d_%H_%M") 
@@ -622,6 +615,7 @@ if __name__ == '__main__':
                 train = True 
                 
                 # build a generator 
+                # from IPython import embed; embed()
                 list_test = sorted(glob.glob(args.testdir + "/*.nii.gz"))
                 assert list_test
                 list_topup_test = None 
@@ -678,15 +672,9 @@ if __name__ == '__main__':
                 if os.path.exists(savedir+file_name.replace(".nii.gz", "_XLR.nii.gz")) and not args.dontskip:
                     continue                
                 
-                start_time = time.time()
                 
                 # predict
                 Y, Y1, Y2, Y3, rigid = model.predict(X, verbose=0)
-                
-                end_time = time.time()
-                execution_time = end_time - start_time
-                print(f"Execution time: {execution_time} seconds")
-                
                         
 
                 # fetch individual data
@@ -736,13 +724,6 @@ if __name__ == '__main__':
         #     pd.concat(dfs).to_csv(file)                       
                     
         print(f"Files are saved to: {savedir}")
-        
-
-
-
-
-
-
 
             
 

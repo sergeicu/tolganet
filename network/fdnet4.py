@@ -16,14 +16,15 @@ import glob as glob
 from datetime import datetime
 from tqdm import tqdm
 
-from IPython import embed; 
 
 from matplotlib import pyplot as plt
 import pandas as pd
 import numpy as np
+import nibabel as nb 
 
 import tensorflow as tf
 
+import wandb
 
 # check if gpu is available 
 if not tf.config.experimental.list_physical_devices('GPU'):
@@ -49,7 +50,7 @@ def load_args():
     parser.add_argument('--rootdir', type=str,  default="/fileserver/external/body/abd/anum/",help='where all the data is contained')
     parser.add_argument('--batch_size', type=int,  default=8)
     parser.add_argument('--patience', type=int,  default=1,help='patience')
-    parser.add_argument('--epochs', type=int,  default=1)
+    parser.add_argument('--epochs', type=int,  default=10)
     parser.add_argument('--early_stopping_delta', type=float,  default=5e-6, help="early stopping criteria threshold after which training is cut off")
     parser.add_argument('--lr', type=float,  default=1e-4, help="learning rate")
     parser.add_argument('--lambda_reg', type=float,  default=1e-5, help="TBD")
@@ -65,16 +66,19 @@ def choose_dataset(rootdir, dataset):
     
     if dataset == 'hcp':
         load_path = rootdir + "data/HCP/"
+        min_shape = (144,168)
     elif dataset == 'tsc':
         load_path = rootdir + "data/TSC/"
+        min_shape = None
     elif dataset == 'dualecho':
-        load_path = rootdir + "data/dualecho/"
+        load_path = rootdir + "data/dualecho/derivatives/topup_python/whole-volume/"
+        min_shape = (316, 288)
     else:
         sys.exit('wrong dataset specified')
     
     assert os.path.exists(load_path), f"Path does not exist"
     
-    return load_path
+    return load_path,min_shape
 
 def check_filenames(list1, list2, list3, load_path, prefix, debug=False):
     newlist1=[]
@@ -83,9 +87,9 @@ def check_filenames(list1, list2, list3, load_path, prefix, debug=False):
     for c, (im_f, topup_f, field_f) in enumerate(zip(list1,list2,list3)):
         skip=False 
         
-        im = im_f.replace(load_path+prefix+"/slices_like_topup/", "")
-        topup = topup_f.replace(load_path+prefix+"/slices_topup/","")
-        field = field_f.replace(load_path+prefix+"/slices_field_topup/", "")
+        im = im_f.replace(load_path+prefix+"/slices_input/", "")
+        topup = topup_f.replace(load_path+prefix+"/slices_topup_image/","")
+        field = field_f.replace(load_path+prefix+"/slices_topup_field/", "")
         
         # find dir number
         im_dir=re.search(r'dir(\d+)', im).group(1)
@@ -133,45 +137,75 @@ def check_filenames(list1, list2, list3, load_path, prefix, debug=False):
             
     return newlist1, newlist2, newlist3
 
-    
-    
-def load_data(load_path, batch_size,debug=False):
-    
+def verify_slices_hcp():
+    # custom function that makes sure that slices are matched 
+    # also - we remove most 
+    pass
 
-    # train
-    slice_path_train = load_path + "/train/slices_like_topup/*.nii"
-    topup_path_train = None
-    field_path_train = None
+def remove_slices(paths, start_end_range):
+    
+    start_from, end_with = start_end_range
+    
+    filtered_paths = [path for path in paths if not any(f"_slice{str(i).zfill(4)}.nii.gz" in path for i in range(start_from,end_with))]    
+    
+    return filtered_paths
+    
+        
+    
+def load_data(load_path, batch_size,debug=False, dataset='hcp'):
 
+    topup_image = "slices_topup_image"
+    if dataset == 'dualecho':
+        topup_image = topup_image + "_e1"
+        
+    
+    ################
+    # Paths init
+    ################
+    slice_path_train = load_path + "/train/slices_input/*.nii*"
+    topup_path_train = load_path + "/train/"+topup_image+"/*.nii*"
+    field_path_train = load_path + "/train/slices_topup_field/*.nii*"
+    
+    slice_path_val = load_path + "/val/slices_input/*.nii*"
+    topup_path_val = load_path + "/val/"+topup_image+"/*.nii*"
+    field_path_val = load_path + "/val/slices_topup_field/*.nii*"
+    
+    slice_path_test = load_path + "/test/slices_input/*.nii*"
+    topup_path_test = load_path + "/test/"+topup_image+"/*.nii*"
+    field_path_test = load_path + "/test/slices_topup_field/*.nii*"
+    
+    
+    # slices to remove 
+    if dataset=='hcp':
+        # these ranges define top and bottom of head in HCP (we want to remove the edges)
+        range1=[0,30]
+        range2=[100,111]
+        imshape=(144,168)
+    elif dataset == 'dualecho':
+        # not removing anything at the moment as number of slices varies significantly per subject - need to curate better data
+        range1=[0,0]
+        range2=[0,0]    
+        imshape=(316,288)    
+
+    ################
+    # Get files and sort 
+    ################
+        
+    # train 
     list_slices_train = glob.glob(slice_path_train)
-    list_topups_train = None
-    list_fields_train = None
+    list_topups_train = glob.glob(topup_path_train)
+    list_fields_train = glob.glob(field_path_train)
 
     list_slices_train.sort()
+    list_topups_train.sort()
+    list_fields_train.sort()
 
     list_train = list_slices_train
     list_topup_train = list_topups_train
     list_field_train = list_fields_train
     
-    if debug:
-        list_train = list_train[:2*batch_size]
-        #list_topup_train = list_topup_train[:2*batch_size]
-        #list_field_train = list_field_train[:2*batch_size]
-
-    dg_train = DataGenerator(
-        list_train,
-        list_topup_train,
-        list_field_train,
-        batch_size=batch_size,
-        shuffle=True,
-        train=True
-        )
 
     # val
-    slice_path_val = load_path + "/val/val/slices_like_topup/*.nii"
-    topup_path_val = load_path + "/val/val/slices_topup/*.nii"
-    field_path_val = load_path + "/val/val/slices_field_topup/*.nii"
-
     list_slices_val = glob.glob(slice_path_val)
     list_topups_val = glob.glob(topup_path_val)
     list_fields_val = glob.glob(field_path_val)
@@ -184,28 +218,7 @@ def load_data(load_path, batch_size,debug=False):
     list_topup_val = list_topups_val
     list_field_val = list_fields_val
     
-    # check if files match
-    list_val, list_topup_val, list_field_val = check_filenames(list_val,list_topup_val, list_field_val, load_path, '/val/val', debug=debug)
-        
-    if debug:
-        list_val = list_val[:2*batch_size]
-        list_topup_val = list_topup_val[:2*batch_size]
-        list_field_val = list_field_val[:2*batch_size]    
-
-    dg_val   = DataGenerator(
-        list_val,
-        list_topup_val,
-        list_field_val, 
-        batch_size=batch_size,
-        shuffle=True,
-        train=True
-        )
-
     # test
-    slice_path_test = load_path + "/test/test/slices_like_topup/*.nii"
-    topup_path_test = load_path + "/test/test/slices_topup/*.nii"
-    field_path_test = load_path + "/test/test/slices_field_topup/*.nii"
-
     list_slices_test = glob.glob(slice_path_test)
     list_topups_test = glob.glob(topup_path_test)
     list_fields_test = glob.glob(field_path_test)
@@ -218,41 +231,168 @@ def load_data(load_path, batch_size,debug=False):
     list_topup_test.sort()
     list_field_test.sort()
     
-    # let's check if the subjectID, and slice numbers match 
-    list_test,list_topup_test, list_field_test= check_filenames(list_test,list_topup_test, list_field_test, load_path, '/test/test',debug=debug)
-
-
     
+    ############    
+    # Check files
+    ############    
+
+        
+    # remove slices 
+    for rangei in [range1,range2]:
+        list_train = remove_slices(list_train, rangei)
+        list_topup_train = remove_slices(list_topup_train, rangei)
+        list_field_train = remove_slices(list_field_train, rangei)
+        
+        list_val = remove_slices(list_val, rangei)
+        list_topup_val = remove_slices(list_topup_val, rangei)
+        list_field_val = remove_slices(list_field_val, rangei)
+        
+        list_test = remove_slices(list_test, rangei)
+        list_topup_test = remove_slices(list_topup_test, rangei)
+        list_field_test = remove_slices(list_field_test, rangei)    
+    
+    ############    
+    # DEBUG - shorten lists 
+    ############    
+
     if debug:
-        list_test = list_val[:2]
+        list_train = list_train[:2*batch_size]
+        list_topup_train = list_topup_train[:2*batch_size]
+        list_field_train = list_field_train[:2*batch_size]
+        
+        list_val = list_val[:2*batch_size]
+        list_topup_val = list_topup_val[:2*batch_size]
+        list_field_val = list_field_val[:2*batch_size]    
+        
+        list_test = list_test[:2]
         list_topup_test = list_topup_test[:2]
         list_field_test = list_field_test[:2]        
+
+    ############    
+    # [custom to each dataset] 
+    # Check that files match 
+    ############    
+    
+    
+    if dataset == 'hcp':
+
+        # check if files match
+        list_train, list_topup_train, list_field_train = check_filenames(list_train, list_topup_train, list_field_train, load_path, '/val/', debug=debug)
+    
+        # check if files match
+        list_val, list_topup_val, list_field_val = check_filenames(list_val,list_topup_val, list_field_val, load_path, '/val/', debug=debug)
+        
+        # let's check if the subjectID, and slice numbers match 
+        list_test,list_topup_test, list_field_test= check_filenames(list_test,list_topup_test, list_field_test, load_path, '/test/',debug=debug)
+        
+
+        # let's limit the size of val to a few batches of data instead -> e.g. 80 slices only 
+        list_val = list_val[:10*batch_size]
+        list_topup_val = list_topup_val[:10*batch_size]
+        list_field_val = list_field_val[:10*batch_size]    
+        
+    if dataset == 'dualecho':
+
+        list_length = 5 if len(list_field_val) >=5 else len(list_field_val)
+        # from IPython import embed; embed()
+        random_numbers = np.random.choice(range(1, len(list_field_val)), list_length, replace=True)
+        for i in random_numbers:
+            
+            i1=list_train[i]
+            i2=list_topup_train[i]
+            i3= list_field_train[i]
+            assert os.path.basename(i1) == os.path.basename(i2) == os.path.basename(i3)
+
+            i1=list_val[i]
+            i2=list_topup_val[i]
+            i3= list_field_val[i]
+            assert os.path.basename(i1) == os.path.basename(i2) == os.path.basename(i3)        
+            
+            
+            if list_test:
+                i1=list_test[i]
+                i2=list_topup_test[i]
+                i3= list_field_test[i]
+                assert os.path.basename(i1) == os.path.basename(i2) == os.path.basename(i3)      
+            else:
+                list_test = list_val
+                list_topup_test = list_topup_val
+                list_field_test = list_field_val
+        
+    ############    
+    # GENERATORS 
+    ############    
+    
+    
+    dg_train = DataGenerator(
+        list_train,
+        list_topup_train,
+        list_field_train,
+        batch_size=batch_size,
+        shuffle=True,
+        train=True, 
+        dim=imshape,
+        )
+        
+
+    dg_val   = DataGenerator(
+        list_val,
+        list_topup_val,
+        list_field_val, 
+        batch_size=batch_size,
+        shuffle=True,
+        train=True,
+        dim=imshape,
+        )
+
+
 
     dg_test  = DataGenerator(
         list_test,
         list_topup_test,
         list_field_test,
         batch_size=1,
-        shuffle=False
+        shuffle=False,
+        dim=imshape,
         )
     
-    embed()
 
-    return dg_train,dg_val, dg_test, list_test
+    return dg_train,dg_val, dg_test, list_test, 
 
 
     
 if __name__ == '__main__':
     
+    
     args = load_args()
+    
+    # wandb setup 
+    wandb.login()
+    if wandb.run is not None:
+        wandb.finish()    
+    project="tolganet-hcp"    
+    run = wandb.init(
+        # Set the project where this run will be logged
+        project=project, 
+        tags=['debug'], 
+        notes='basic test')
+
+    config = dict(test_name='basic-test')
+                    # initial_width=64,base_width=10, current_width=10,
+                    # dropout=True,dropout_rate=0.2,
+                    # epochs=600,learning_rate = 0.0001,
+                    # patience=100, output_size=2,batch_size=8,
+
+    w = wandb.config = config        
+
 
     # data 
-    data_path = choose_dataset(args.rootdir, args.dataset)
-    dg_train, dg_val, dg_test,list_test = load_data(data_path, args.batch_size, args.debug)
+    data_path, imshape = choose_dataset(args.rootdir, args.dataset)
+    dg_train, dg_val, dg_test,list_test = load_data(data_path, args.batch_size, args.debug,args.dataset)
 
     # compile model 
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.lr)
-    model = model_compile(optimizer=optimizer, reg=args.lambda_reg)
+    model = model_compile(optimizer=optimizer, reg=args.lambda_reg, input_shape=imshape)
 
     # where to save 
     current_time = datetime.now().strftime("%Y_%m_%d_%H_%M") 
@@ -274,13 +414,53 @@ if __name__ == '__main__':
             baseline=None,
             restore_best_weights=True
             )       
+        
+        callback2 = tf.keras.callbacks.ModelCheckpoint(
+            savedir + "/"+"ckpt-{batch:02d}-{loss:.2f}.h5", 
+            monitor='val_loss',
+            save_best_only=False,
+            mode='min', 
+            save_weights_only=True,
+            save_freq=10) #            period=10,
+        
+        callback3 = wandb.keras.WandbMetricsLogger(log_freq="batch", )
+                
+        class BatchValidationCallback(tf.keras.callbacks.Callback):
+            def __init__(self, val_data, batch_freq):
+                super(BatchValidationCallback, self).__init__()
+                self.val_data = val_data
+                self.batch_freq = batch_freq
+                self.batch_counter = 0
+
+            def on_batch_end(self, batch, logs=None):
+                self.batch_counter += 1
+                if self.batch_counter % self.batch_freq == 0:
+                    val_logs = self.model.evaluate(self.val_data[0], self.val_data[1], verbose=0)
+                    for key, value in val_logs.items():
+                        print(f'Validation {key}: {value}')
+                        
+        #callback4 = BatchValidationCallback(dg_val, batch_freq=10)
+
+
+
+        # from IPython import embed; embed() 
+        # from IPython.core.interactiveshell import InteractiveShell
+        # InteractiveShell.ast_node_interactivity = "all" 
+        # x,y = next(iter(dg_train))
+        # len(x)
+        # for xi in x:
+        #     xi.shape
+        # len(y)
+        # for yi in y:
+        #     yi.shape
+        # x2,y2 = next(iter(dg_val))
 
         # train 
         hist = model.fit(
             dg_train,
             epochs=epochs,
             validation_data=dg_val,
-            callbacks=[callback]
+            callbacks=[callback, callback2,callback3]
             )
         
         # save weights (at the end)

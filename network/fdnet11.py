@@ -1,3 +1,5 @@
+"""We are optimizing the network for inferrence here"""
+
 """This is heavily refactored version of the original code by Serge: 
     - add __name__ call
     - split code into functions 
@@ -25,6 +27,8 @@ import nibabel as nb
 import tensorflow as tf
 import time 
 
+start_time = time.time()
+
 import wandb
 
 # check if gpu is available 
@@ -45,7 +49,7 @@ for device in physical_devices:
 def load_args(): 
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str,  choices=["train", "test"],default="train",help='train or test')
-    parser.add_argument('--dataset', type=str,  choices=["dualecho", "hcp","hcp_tolga12", "tsc", "custom"],default="hcp",help='choose which dataset to train / test on')
+    parser.add_argument('--dataset', type=str,  choices=["dualecho", "hcp","hcp_tolga12", "tsc", "custom", "individual_RLRL"],default="hcp",help='choose which dataset to train / test on')
     
     # parameters 
     parser.add_argument('--rootdir', type=str,  default="/fileserver/external/body/abd/anum/",help='where all the data is contained')
@@ -86,7 +90,7 @@ def load_args():
     
     parser.add_argument('--custompath', type=str, default=None, help="custom path to train data")
     parser.add_argument('--customshape', nargs="+", type=int, default=None, help="custom shape")
-    parser.add_argument('--notopup', action="store_false", help="skip topup validation")
+    parser.add_argument('--notopup', action="store_true", help="skip topup validation")
     
     
     parser.add_argument('--nowandb', action="store_true", help="skip weights and biases logging")
@@ -119,6 +123,12 @@ def choose_dataset(rootdir, dataset,custompath=None, customshape=None):
         assert customshape is not None
         load_path = custompath
         min_shape = customshape     
+    elif dataset == 'individual_RLRL':
+        assert custompath is not None
+        assert customshape is not None
+        load_path = custompath
+        min_shape = customshape     
+
     else:
         sys.exit('wrong dataset specified')
     
@@ -219,9 +229,10 @@ def load_data(load_path, batch_size,debug=False, dataset='hcp', fileprefix=None,
         
             
     if topup:
-        
         if dataset == 'dualecho':
             topup_image = "slices_topup_image" + "_e1"
+        else: 
+            topup_image = "slices_topup_image"
         
         topup_path_train = load_path + "/train/"+topup_image+"/*.nii*"
         field_path_train = load_path + "/train/slices_topup_field/*.nii*"
@@ -285,6 +296,13 @@ def load_data(load_path, batch_size,debug=False, dataset='hcp', fileprefix=None,
         range2=[0,0]    
         assert imshape is not None 
         assert len(imshape)==2
+    elif dataset == 'individual_RLRL':
+        # not removing anything at the moment as number of slices varies significantly per subject - need to curate better data
+        range1=[0,0]
+        range2=[0,0]    
+        assert imshape is not None 
+        assert len(imshape)==2    
+    
     
 
     
@@ -618,7 +636,7 @@ if __name__ == '__main__':
         # pull results from customdir
         if args.testdir: 
             if args.testdir_field is None and args.testdir_topup is None: 
-                no_topup = True
+                no_topup = args.notopup
                 train = True 
                 
                 # build a generator 
@@ -639,10 +657,27 @@ if __name__ == '__main__':
                 
                 
             else:
-                no_topup = False    
-                train = False
-                sys.exit("Not implemented")    
-        
+                no_topup = args.notopup
+                train = True 
+                
+                # build a generator 
+                list_test = sorted(glob.glob(args.testdir + "/*.nii.gz"))
+                assert list_test
+                list_topup_test = sorted(glob.glob(args.testdir_topup + "/*.nii.gz"))
+                list_field_test = sorted(glob.glob(args.testdir_field + "/*.nii.gz"))
+                assert list_topup_test
+                assert list_field_test
+                
+                dg_test  = DataGenerator(
+                    list_test,
+                    list_topup_test,
+                    list_field_test,
+                    batch_size=args.batch_size,
+                    shuffle=False,
+                    train=False,
+                    dim=imshape,
+                    )
+                        
         
              
             
@@ -654,6 +689,12 @@ if __name__ == '__main__':
         
         L = len(dg_test)
         dfs = []
+        
+        
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print(f"START time: {execution_time} seconds")      
+          
         for counter, (dat, names) in enumerate(zip(dg_test,dg_test_names)):
             print(f"{counter}/{L}")
             
@@ -664,72 +705,77 @@ if __name__ == '__main__':
                 
             
             
+        
+            i=0 # WARNING!!!! we should refer to specific name... 
             
+            
+            # dat = dg_test[j]
+            X = dat[0]
 
-            for i in range(0, args.batch_size):
-                
-                # dat = dg_test[j]
-                X = dat[0]
+            # filename 
+            file_name = os.path.basename(names[i]) 
 
-                # filename 
-                file_name = os.path.basename(names[i])
+            # skip existing 
+            if os.path.exists(savedir+file_name.replace(".nii.gz", "_XLR.nii.gz")) and not args.dontskip:
+                continue                
+            
+            start_time = time.time()
+            
+            # predict
+            # from IPython import embed; embed()
+            Y, Y1, Y2, Y3, rigid = model.predict(X, verbose=0)
+            
+            end_time = time.time()
+            execution_time = end_time - start_time
+            print(f"Execution time: {execution_time} seconds")
+            
+                    
 
-                # skip existing 
-                if os.path.exists(savedir+file_name.replace(".nii.gz", "_XLR.nii.gz")) and not args.dontskip:
-                    continue                
-                
-                start_time = time.time()
-                
-                # predict
-                Y, Y1, Y2, Y3, rigid = model.predict(X, verbose=0)
-                
-                end_time = time.time()
-                execution_time = end_time - start_time
-                print(f"Execution time: {execution_time} seconds")
-                
-                        
+            # fetch individual data
+            XLR = X[0][i,:,:,0]
+            XRL = X[1][i,:,:,0]
+            YLR = Y[i,:,:,0,0]
+            YRL = Y[i,:,:,0,1]
+            network_image = Y[i,:,:,0,3]
+            network_field = Y[i,:,:,0,2]  
+            rigid_transform = rigid[i,:]
+                                
+            # get affine 
+            imo=nb.load(names[i])
 
-                # fetch individual data
-                XLR = X[0][i,:,:,0]
-                XRL = X[1][i,:,:,0]
-                YLR = Y[i,:,:,0,0]
-                YRL = Y[i,:,:,0,1]
-                network_image = Y[i,:,:,0,3]
-                network_field = Y[i,:,:,0,2]  
-                rigid_transform = rigid[i,:]
-                                    
-                # get affine 
-                imo=nb.load(names[i])
-
-                # save 
-                nb.save(nb.Nifti1Image(XLR.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XLR.nii.gz"))
-                nb.save(nb.Nifti1Image(XRL.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XRL.nii.gz"))
-                nb.save(nb.Nifti1Image(YLR,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YLR.nii.gz"))
-                nb.save(nb.Nifti1Image(YRL,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YRL.nii.gz"))
+            # save 
+            nb.save(nb.Nifti1Image(XLR.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XLR.nii.gz"))
+            nb.save(nb.Nifti1Image(XRL.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_XRL.nii.gz"))
+            nb.save(nb.Nifti1Image(YLR,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YLR.nii.gz"))
+            nb.save(nb.Nifti1Image(YRL,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_YRL.nii.gz"))
+            
+            nb.save(nb.Nifti1Image(network_image,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_image.nii.gz"))
+            nb.save(nb.Nifti1Image(network_field,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_field.nii.gz"))
+            with open(savedir+file_name.replace(".nii.gz","_rigid_transform.txt"), "w") as f:
+                lines = [str(i) for i in list(rigid_transform)]
+                f.writelines(lines)
                 
-                nb.save(nb.Nifti1Image(network_image,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_image.nii.gz"))
-                nb.save(nb.Nifti1Image(network_field,affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_network_field.nii.gz"))
-                with open(savedir+file_name.replace(".nii.gz","_rigid_transform.txt"), "w") as f:
-                    lines = [str(i) for i in list(rigid_transform)]
-                    f.writelines(lines)
-
-                if not no_topup: 
+            if not no_topup: 
+                if args.dataset == 'individual_RLRL':
+                    topup_image =  dat[1][0][i,:,:,0,3]
+                    topup_field = dat[1][0][i,:,:,0,2]                                            
+                else:
                     topup_image =  dat[1][0][i,:,:,0,3]
                     topup_field = dat[1][0][i,:,:,0,2]                    
-                
-                    psnr_i, psnr_f, ssim_i, ssim_f  = print_metrics2(topup_image,topup_field,network_image,network_field,file_name,mask_field=True)  
-                    vol = re.sub(r'_slice.*$', '', file_name)
-                    slicee=file_name[-11:-7]
-                    # df = pd.DataFrame(psnr_image=psnr_i, psnr_field=psnr_f, ssim_image=ssim_i,ssim_field=ssim_f,file=vol, slicee=slicee)     
-                    df = pd.DataFrame({'psnr_image': [psnr_i], 'psnr_field': [psnr_f], 'ssim_image': [ssim_i], 'ssim_field': [ssim_f], 'file': [vol], 'slicee': [slicee]})
+            
+                psnr_i, psnr_f, ssim_i, ssim_f  = print_metrics2(topup_image,topup_field,network_image,network_field,file_name,mask_field=True)  
+                vol = re.sub(r'_slice.*$', '', file_name)
+                slicee=file_name[-11:-7]
+                # df = pd.DataFrame(psnr_image=psnr_i, psnr_field=psnr_f, ssim_image=ssim_i,ssim_field=ssim_f,file=vol, slicee=slicee)     
+                df = pd.DataFrame({'psnr_image': [psnr_i], 'psnr_field': [psnr_f], 'ssim_image': [ssim_i], 'ssim_field': [ssim_f], 'file': [vol], 'slicee': [slicee]})
 
-                    dfs.append(df)
-                    with open(savedir+file_name.replace(".nii.gz","_metrics.txt"), "w") as file:
-                        df.to_csv(file)                    
-                    
-                    nb.save(nb.Nifti1Image(topup_image.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_topup_image.nii.gz"))
-                    nb.save(nb.Nifti1Image(topup_field.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_topup_field.nii.gz"))
-                    
+                dfs.append(df)
+                with open(savedir+file_name.replace(".nii.gz","_metrics.txt"), "w") as file:
+                    df.to_csv(file)                    
+                
+                nb.save(nb.Nifti1Image(topup_image.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_topup_image.nii.gz"))
+                nb.save(nb.Nifti1Image(topup_field.numpy(),affine=imo.affine,header=imo.header), savedir+file_name.replace(".nii.gz", "_topup_field.nii.gz"))
+                
 
         # get all metrics 
         # with open(savedir+"/combined_metrics.txt", "w") as file:
