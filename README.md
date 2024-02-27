@@ -28,8 +28,7 @@ weights=/fileserver/external/body/abd/anum/tolganet/network/weights/fdnet_weight
 imagepath=/fileserver/external/body/abd/anum/data/abd/v4_ax/b50/slices_input_test_rotated_MANY/
 savedir=$imagepath/predicted_tolga42_TEST
 rm -rf $savedir
-python fdnet11.py test --dataset custom --custompath $imagepath --customshape 144 168 --weights $weights --savedir $savedir --legacy --batch_size 80 --dontskip --testdir $imagepath --notopup 
-
+python fdnet11.py --custompath $imagepath --customshape 144 168 --weights $weights --savedir $savedir --legacy --batch_size 80 --dontskip
 
 ```
 
