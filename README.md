@@ -1,25 +1,12 @@
-# FD-Net
-Official repository for "FD-Net: An Unsupervised Deep Forward-Distortion Model for Susceptibility Artifact Correction in EPI".
-- [arXiv](https://arxiv.org/abs/2303.10436)
-- [MRM](https://onlinelibrary.wiley.com/doi/full/10.1002/mrm.29851)
 
-```
-Zaid Alkilani A, Çukur T, Saritas EU. FD-Net: An unsupervised deep forward-distortion model for susceptibility artifact correction in EPI. Magn Reson Med. 2023; 1-17. doi: 10.1002/mrm.29851
-```
+# Dataset & Training 
+...details of training 
 
-# Demo
-- The files under ```/TOPUP_files``` demonstrate how TOPUP could be performed.
-- The files under ```/slicing``` demonstrate how the dataset could be sliced.
-- The files under ```/network``` demonstrate how the proposed FD-Net can be constructed, trained, and evaluated.
+# Preprocessing
+...
 
-# Dataset
-Data is accessible from the Human Connectome Project's [database](https://db.humanconnectome.org/) (WU-Minn HCP Data - 1200 Subjects; see the paper for more details). Detailed information on the installation and usage of TOPUP can be found at [the official website](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/topup).
-
-# Pretrained Networks
-Weights for the pre-trained FD-Net can be found under ```/network/weights```.
-
-# Training
-Training code is provided in ```/network/fdnet.py```. See the relevant code section(s) (i.e., ```#%% TRAIN (DWI)``` and ```#%% LOAD DATA + TRAIN (FMRI)```).
+# Inferrence
+...
 
 # Citation
 You are encouraged to modify/distribute this code. However, please acknowledge this code and cite the paper appropriately.
@@ -57,19 +44,8 @@ You are encouraged to modify/distribute this code. However, please acknowledge t
 }
 
 ```
-(c) ICON Lab 2023
-
-# Prerequisites
-- python=3.9.6
-- contextlib2==21.6.0
-- numpy==1.23.3
-- scipy==1.9.1
-- scikit-image==0.18.1
-- nibabel==4.0.2
-- dipy==1.5.0
-- tensorflow==2.10.0
 
 # Acknowledgements
 A preliminary version of this work was presented in the Annual Meeting of ISMRM in London, 2022. This work was supported by the Scientific and Technological Council of Turkey (TÜBİTAK) via Grant 117E116. Data were provided by the Human Connectome Project, WU-Minn Consortium (Principal Investigators: David Van Essen and Kamil Ugurbil; 1U54MH091657) funded by the 16 NIH Institutes and Centers that support the NIH Blueprint for Neuroscience Research; and by the McDonnell Center for Systems Neuroscience at Washington University.
 
-For questions/comments please send an email to: `alkilani[at]ee.bilkent.edu.tr`
+For questions/comments please send an email to: `<><><>`
