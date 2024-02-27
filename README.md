@@ -26,9 +26,9 @@ weights=/fileserver/external/body/abd/anum/tolganet/network/weights/fdnet_weight
 
 # basic test - slices_input_test - liver (AX)
 imagepath=/fileserver/external/body/abd/anum/data/abd/v4_ax/b50/slices_input_test_rotated_MANY/
-savedir=$imagepath/predicted_tolga42_TEST
+savedir=$imagepath/predicted_tolga42_TEST2
 rm -rf $savedir
-python fdnet11.py --custompath $imagepath --customshape 144 168 --weights $weights --savedir $savedir --legacy --batch_size 80 --dontskip
+python fdnet11.py --custompath $imagepath --customshape 144 168 --weights $weights --savedir $savedir --legacy --batch_size 160 --dontskip
 
 ```
 
