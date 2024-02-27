@@ -1,0 +1,69 @@
+# sergeonly 
+
+##################
+# init 
+##################
+
+# ssh to gpu machine 
+ssh ankara 
+
+# Init conda  
+source /fileserver/external/body/abd/anum/miniconda3/bin/activate
+conda activate fdnet3
+export CUDA_VISIBLE_DEVICES=0,1
+
+
+
+##################
+# slices
+##################
+
+
+# git clone 
+#git clone git@github.com:sergeicu/tolganet.git
+#cd tolganet/network
+#git checkout inferrence_for_liam
+cd /fileserver/external/body/abd/anum/tolganet_test_for_liam/tolganet
+git checkout inferrence_for_liam
+
+# set the network weights (NB it is NOT an existing file but a regexp expression)
+weights=/fileserver/external/body/abd/anum/tolganet/network/weights/fdnet_weights_42_subjects
+
+# run network with a batch of 160 images 
+
+# basic test - slices_input_test - liver (AX)
+imagepath=/fileserver/external/body/abd/anum/data/abd/v4_ax/b50/slices_input_test_rotated_MANY/
+savedir=$imagepath/predicted_tolga42_TEST2
+rm -rf $savedir
+python fdnet11.py --custompath $imagepath --customshape 144 168 --weights $weights --savedir $savedir --legacy --batch_size 160 --dontskip
+
+
+
+##################
+# volumes 
+##################
+
+# data is here 
+/fileserver/external/body/abd/anum/data/individual/20240123_RL_LR/output/RL_e13e2_cm_geomean/
+slices_input 
+slices_topup_field
+slices_topup_image
+
+
+# git clone 
+#git clone git@github.com:sergeicu/tolganet.git
+#cd tolganet/network
+#git checkout inferrence_for_liam
+cd /fileserver/external/body/abd/anum/tolganet_test_for_liam/tolganet
+git checkout inferrence_for_liam_volumes
+
+# set the network weights (NB it is NOT an existing file but a regexp expression)
+weights=/fileserver/external/body/abd/anum/tolganet/network/weights/fdnet_weights_42_subjects
+
+# run network with a batch of 160 images 
+
+# basic test - slices_input_test - liver (AX)
+imagepath=q/abd/v4_ax/b50/slices_input_test_rotated_MANY/
+savedir=$imagepath/predicted_tolga42_TEST2
+rm -rf $savedir
+python fdnet11.py --custompath $imagepath --customshape 144 168 --weights $weights --savedir $savedir --legacy --batch_size 160 --dontskip
