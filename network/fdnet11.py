@@ -465,18 +465,9 @@ if __name__ == '__main__':
     
     args = load_args()
     
-    # wandb setup 
-    wandb.login()
-    if wandb.run is not None:
-        wandb.finish()    
     if args.mode != 'test' and not args.nowandb:
         project=args.project
-        run = wandb.init(
-            # Set the project where this run will be logged
-            project=args.project, 
-            tags=args.tags, 
-            notes='',
-            name=args.name)
+
 
         config = {}
         if args.name is not None: 
@@ -486,8 +477,7 @@ if __name__ == '__main__':
             # dropout=True,dropout_rate=0.2,
             # epochs=600,learning_rate = 0.0001,
             # patience=100, output_size=2,batch_size=8,
-
-        w = wandb.config = config        
+     
 
 
     # data 
