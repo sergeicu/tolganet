@@ -1,20 +1,20 @@
 
-# Inferrence - Liam - please test 
+# Inferrence - Liam - please test
 ```
 
-# run our own kidney abd data through the best tolga net - to test timing 
+# run our own kidney abd data through the best tolga net - to test timing
 
 
-# ssh to gpu machine 
-ssh ankara 
+# ssh to gpu machine
+ssh ankara
 
-# Init conda  
+# Init conda
 source /fileserver/external/body/abd/anum/miniconda3/bin/activate
 conda activate fdnet3
 export CUDA_VISIBLE_DEVICES=0,1
 
 
-# git clone 
+# git clone
 git clone git@github.com:sergeicu/tolganet.git
 cd tolganet/network
 git checkout inferrence_for_liam
@@ -22,7 +22,7 @@ git checkout inferrence_for_liam
 # set the network weights (NB it is NOT an existing file but a regexp expression)
 weights=/fileserver/external/body/abd/anum/tolganet/network/weights/fdnet_weights_42_subjects
 
-# run network with a batch of 160 images 
+# run network with a batch of 160 images
 
 # basic test - slices_input_test - liver (AX)
 imagepath=/fileserver/external/body/abd/anum/data/abd/v4_ax/b50/slices_input_test_rotated_MANY/
@@ -34,8 +34,8 @@ python fdnet11.py --custompath $imagepath --customshape 144 168 --weights $weigh
 
 
 
-# Dataset & Training 
-...details of training 
+# Dataset & Training
+...details of training
 
 # Preprocessing
 ...
@@ -58,7 +58,7 @@ You are encouraged to modify/distribute this code. However, please acknowledge t
 }
 
 @misc{ZaidAlkilani2023arxiv,
-	title = "FD-Net: An Unsupervised Deep Forward-Distortion Model for Susceptibility Artifact Correction in EPI", 
+	title = "FD-Net: An Unsupervised Deep Forward-Distortion Model for Susceptibility Artifact Correction in EPI",
 	author = "Zaid Alkilani, Abdallah AND {\c C}ukur, Tolga AND Saritas, Emine Ulku",
 	year = "2023",
   	eprint = "2303.10436",
